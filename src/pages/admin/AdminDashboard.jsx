@@ -48,7 +48,7 @@ function buildDashboardStatsSnapshot({ regions = [], publicRegions = [], mission
     },
     users: {
       total: members.length,
-      active: members.filter((item) => (item.status || item.status) === "ACTIVE").length,
+      active: members.filter((item) => item.status === "ACTIVE").length,
     },
     points: {
       ledgerCount: pointLedger.length,
@@ -116,22 +116,34 @@ export default function AdminDashboard() {
         throw new Error("storageAdapter.getRegions or storageAdapter.getMembers is not a function");
       }
 
-      const [serverRegions, serverMembers] = await Promise.all([
+      const [serverRegions, serverMembers, serverMissions, serverEvents, serverShops, serverAuditions, serverNotices, serverBroadcasts] = await Promise.all([
         withTimeout(storageAdapter.getRegions(), 5000, 'admin-regions'),
-        withTimeout(storageAdapter.getMembers(), 5000, 'admin-members')
+        withTimeout(storageAdapter.getMembers(), 5000, 'admin-members'),
+        withTimeout(storageAdapter.getMissions(), 5000, 'admin-missions'),
+        withTimeout(storageAdapter.getEvents(), 5000, 'admin-events'),
+        withTimeout(storageAdapter.getShops(), 5000, 'admin-shops'),
+        withTimeout(storageAdapter.getAuditions(), 5000, 'admin-auditions'),
+        withTimeout(storageAdapter.getNotices(), 5000, 'admin-notices'),
+        withTimeout(storageAdapter.getBroadcasts(), 5000, 'admin-broadcasts'),
       ]);
 
       localStorage.setItem("su_regions", JSON.stringify(serverRegions));
       localStorage.setItem("su_members_v1", JSON.stringify(serverMembers));
+      localStorage.setItem("su_missions", JSON.stringify(serverMissions || []));
+      localStorage.setItem("su_events", JSON.stringify(serverEvents || []));
+      localStorage.setItem("su_shops", JSON.stringify(serverShops || []));
+      localStorage.setItem("su_auditions", JSON.stringify(serverAuditions || []));
+      localStorage.setItem("su_notices", JSON.stringify(serverNotices || []));
+      localStorage.setItem("su_broadcasts", JSON.stringify(serverBroadcasts || []));
 
       const regions = serverRegions || [];
       const publicRegions = getPublicRegions?.() || [];
-      const missions = getMissions?.() || [];
-      const events = getEvents?.() || [];
-      const shops = getShops?.() || [];
-      const auditions = getAuditions?.() || [];
-      const notices = getNotices?.() || [];
-      const broadcasts = getBroadcasts?.() || [];
+      const missions = serverMissions || [];
+      const events = serverEvents || [];
+      const shops = serverShops || [];
+      const auditions = serverAuditions || [];
+      const notices = serverNotices || [];
+      const broadcasts = serverBroadcasts || [];
       const members = serverMembers || [];
 
       let pointLedger = [];

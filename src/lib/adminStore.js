@@ -1513,7 +1513,7 @@ export const getAdminStats = () => {
     },
     auditions: {
       total: getAuditions().length,
-      active: getActiveAuditions().length,
+      active: getAuditions().filter((a) => a.isActive && calculateStatus(a.startDate, a.endDate) === "ongoing").length,
     },
     notices: {
       total: getNotices().length,
@@ -1525,7 +1525,7 @@ export const getAdminStats = () => {
     },
     users: {
       total: getUsers().length,
-      active: getUsers().filter((u) => u.status === "active").length,
+      active: getUsers().filter((u) => u.status === "ACTIVE").length,
     },
   };
 };
