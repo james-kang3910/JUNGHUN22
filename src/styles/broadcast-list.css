@@ -1,0 +1,103 @@
+/* Broadcast list — light theme (su-app 디자인 시스템 기반) */
+.broadcast-list {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 0;
+}
+
+.date-group {
+  margin: 8px 0 18px;
+}
+
+.date-header {
+  position: -webkit-sticky;
+  position: sticky;
+  top: 52px; /* su-app .su-top 높이 기준 */
+  background: #E8EDF2;
+  padding: 8px 16px;
+  font-weight: 700;
+  font-size: 13px;
+  color: #637074;
+  border-bottom: 1px solid #DDE3EA;
+  z-index: 5;
+  letter-spacing: 0.3px;
+}
+
+.video-card {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  align-items: center;
+  border-radius: 0;
+  background: transparent;
+  border-bottom: 1px solid #DDE3EA;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.video-card:hover {
+  background: rgba(12,84,96,0.04);
+}
+.video-card:last-child {
+  border-bottom: none;
+}
+
+.video-thumb {
+  width: 40%;
+  max-width: 160px;
+  aspect-ratio: 16/9;
+  border-radius: 10px;
+  overflow: hidden;
+  position: relative;
+  background: #EEF1F5;
+  border: 1px solid #DDE3EA;
+  flex-shrink: 0;
+}
+
+.video-meta {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.video-title {
+  font-size: 14px;
+  font-weight: 600;
+  color: #0D1B21;
+  line-height: 1.4;
+}
+
+.video-time {
+  font-size: 12px;
+  color: #637074;
+}
+
+.play-overlay {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+
+.play-button {
+  pointer-events: auto;
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  background: rgba(12,84,96,0.85);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: white;
+  font-size: 18px;
+  border: none;
+  box-shadow: 0 2px 8px rgba(12,84,96,0.25);
+}
+
+@media(min-width: 768px) {
+  .video-card { padding: 12px 16px; }
+  .video-thumb { max-width: 220px; }
+}

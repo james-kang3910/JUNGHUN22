@@ -1,0 +1,62 @@
+/* Admin-only input fixes (desktop only). Scoped to .su-admin to avoid affecting other pages.
+   Purpose: ensure input/textarea/select have visible background, text color, placeholder, and survive Chrome autofill.
+*/
+
+@media (min-width: 768px) {
+  .su-admin input,
+  .su-admin textarea,
+  .su-admin select {
+    background-color: rgba(255,255,255,0.03) !important; /* subtle but visible on dark bg */
+    color: rgba(255,255,255,0.95) !important;
+    border: 1px solid rgba(255,255,255,0.06) !important;
+    padding: 8px 10px !important;
+    border-radius: 8px !important;
+    outline: none !important;
+    box-shadow: none !important;
+    -webkit-text-fill-color: rgba(255,255,255,0.95) !important;
+  }
+
+  .su-admin input::placeholder,
+  .su-admin textarea::placeholder,
+  .su-admin select::placeholder {
+    color: rgba(255,255,255,0.5) !important;
+    opacity: 1 !important;
+  }
+
+  /* Focus state (accessible contrast) */
+  .su-admin input:focus,
+  .su-admin textarea:focus,
+  .su-admin select:focus {
+    box-shadow: 0 0 0 3px rgba(99,102,241,0.12) !important;
+    border-color: rgba(99,102,241,0.9) !important;
+  }
+
+  /* Disable transparency from other rules by forcing a solid inset background via box-shadow for autofill in Chrome */
+  .su-admin input:-webkit-autofill,
+  .su-admin textarea:-webkit-autofill,
+  .su-admin select:-webkit-autofill {
+    -webkit-box-shadow: 0 0 0px 1000px rgba(255,255,255,0.03) inset !important;
+    box-shadow: 0 0 0px 1000px rgba(255,255,255,0.03) inset !important;
+    -webkit-text-fill-color: rgba(255,255,255,0.95) !important;
+  }
+
+  /* Additional vendor-specific autofill selectors (best-effort) */
+  input:-internal-autofill-selected,
+  textarea:-internal-autofill-selected,
+  select:-internal-autofill-selected {
+    background-color: rgba(255,255,255,0.03) !important;
+    -webkit-text-fill-color: rgba(255,255,255,0.95) !important;
+  }
+
+  /* Make sure selects show text color in dropdown controls */
+  .su-admin select {
+    appearance: none !important;
+    -webkit-appearance: none !important;
+    -moz-appearance: none !important;
+    background-image: linear-gradient(45deg, transparent 50%, rgba(255,255,255,0.7) 50%), linear-gradient(135deg, rgba(255,255,255,0.7) 50%, transparent 50%);
+    background-position: calc(100% - 18px) calc(1em + 2px), calc(100% - 13px) calc(1em + 2px);
+    background-size: 6px 6px, 6px 6px;
+    background-repeat: no-repeat;
+    padding-right: 34px !important;
+  }
+}

@@ -1,0 +1,995 @@
+import { useMemo, useState, useRef, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
+import * as storageAdapter from "../lib/storageAdapter";
+import { getAuthInfo } from "../lib/authStore";
+import ShopEditModal from "../components/ShopEditModal";
+
+export default function Shops() {
+  const navigate = useNavigate();
+  const goHome = () => navigate("/home");
+  const goBack = () => {
+    try {
+      window.history.back();
+    } catch {}
+  };
+
+  const [cat, setCat] = useState("all"); // all | food | cafe | life | beauty | etc
+  const [q, setQ] = useState("");
+
+  // ★ 상점 등록 모달 상태
+  const [showModal, setShowModal] = useState(false);
+  const [formError, setFormError] = useState("");
+  const [regForm, setRegForm] = useState({
+    name: "",
+    category: "food",
+    sub: "",
+    ownerName: "",
+    ownerPhone: "",
+    photoFile: null,
+    photoPreviewUrl: null,
+  });
+  const photoInputRef = useRef(null);
+
+  // ★ 수정 모달 상태
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingShop, setEditingShop] = useState(null);
+  const [showShopPicker, setShowShopPicker] = useState(false);
+
+  // ★ 서버에서 가져온 상점 리스트
+  const [shops, setShops] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  // ★ 내가 소유한 상가 목록 (서버에서 조회)
+  const [myShops, setMyShops] = useState([]);
+  const [myShopsLoading, setMyShopsLoading] = useState(false);
+
+  const cats = useMemo(
+    () => [
+      { key: "all", label: "전체" },
+      { key: "food", label: "음식" },
+      { key: "cafe", label: "카페" },
+      { key: "life", label: "생활" },
+      { key: "beauty", label: "뷰티" },
+      { key: "etc", label: "기타" },
+    ],
+    []
+  );
+
+  // 서버에서 데이터 로드
+  useEffect(() => {
+    loadShops();
+    loadMyShops();
+  }, []);
+
+  const loadShops = async () => {
+    try {
+      setLoading(true);
+      const data = (await storageAdapter.getShops()) || [];
+      // Normalize id fields from different DB shapes (id | shopId | shop_id)
+      const normalized = data.map((s) => ({ ...s, id: s.id || s.shopId || s.shop_id || s.shopId }));
+      setShops(normalized);
+    } catch (error) {
+      console.error('[Shops] Failed to load shops:', error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const loadMyShops = async () => {
+    try {
+      const auth = getAuthInfo();
+      if (!auth || !auth.memberId) {
+        console.log('[Shops] No auth, skipping my shops load');
+        setMyShops([]);
+        return;
+      }
+      
+      setMyShopsLoading(true);
+      const data = (await storageAdapter.getMyShops(auth.memberId)) || [];
+      const normalized = data.map((s) => ({ ...s, id: s.id || s.shopId || s.shop_id || s.shopId }));
+      setMyShops(normalized);
+    } catch (error) {
+      console.error('[Shops] Failed to load my shops:', error);
+      setMyShops([]);
+    } finally {
+      setMyShopsLoading(false);
+    }
+  };
+
+  const staticShops = useMemo(
+    () => [
+      {
+        id: 1, name: "공유국밥", cat: "food", sub: "든든한 한그릇 · 포장 가능", badge: "HOT", dist: "0.8km", score: "4.8", status: "approved", image: null,
+        businessHours: "10:00 ~ 21:00", closedDay: "매주 월요일", breakTime: "15:00 ~ 16:30",
+        recommendedMenus: [{ name: "얼큰국밥", price: "9,000원" }, { name: "수육국밥", price: "10,000원" }, { name: "순대국밥", price: "8,500원" }],
+        menus: ["얼큰국밥 9,000원", "수육국밥 10,000원", "순대국밥 8,500원", "모듬국밥 12,000원", "수육(대) 25,000원", "수육(소) 15,000원", "막걸리 5,000원", "소주 5,000원", "음료 2,000원"],
+        amenities: ["포장 가능", "주차 가능", "예약 가능"],
+        phone: "02-1234-5678", address: "서울시 강남구 테헤란로 123", lat: 37.5012, lng: 127.0396,
+      },
+      {
+        id: 2, name: "동네카페 라떼", cat: "cafe", sub: "시그니처 라떼 · 작업하기 좋아요", badge: "NEW", dist: "1.2km", score: "4.6", status: "approved", image: null,
+        businessHours: "08:00 ~ 22:00", closedDay: "연중무휴", breakTime: null,
+        recommendedMenus: [{ name: "시그니처 라떼", price: "5,500원" }, { name: "아메리카노", price: "4,000원" }, { name: "딸기케이크", price: "6,500원" }],
+        menus: ["아메리카노 4,000원", "카페라떼 5,000원", "시그니처 라떼 5,500원", "바닐라라떼 5,500원", "카푸치노 5,000원", "딸기케이크 6,500원", "티라미수 7,000원"],
+        amenities: ["주차 가능", "반려동물 가능"],
+        phone: "02-2345-6789", address: "서울시 강남구 선릉로 456", lat: 37.5045, lng: 127.0485,
+      },
+      {
+        id: 3, name: "생활수리센터", cat: "life", sub: "간단 수리 · 출장 가능", badge: "VIP", dist: "2.1km", score: "4.5", status: "pending", image: null,
+        businessHours: "09:00 ~ 18:00", closedDay: "주말", breakTime: "12:00 ~ 13:00",
+        recommendedMenus: [], menus: ["가전수리", "배관수리", "전기수리", "출장서비스"],
+        amenities: ["예약 가능"],
+        phone: "02-3456-7890", address: "서울시 서초구 방배로 789",
+      },
+      {
+        id: 4, name: "뷰티살롱 S", cat: "beauty", sub: "커트/염색 · 예약 우선", badge: "SALE", dist: "0.5km", score: "4.7", status: "approved", image: null,
+        businessHours: "10:00 ~ 20:00", closedDay: "매주 화요일", breakTime: null,
+        recommendedMenus: [{ name: "시그니처 커트", price: "25,000원" }, { name: "염색", price: "50,000원~" }, { name: "펌", price: "70,000원~" }],
+        menus: ["남성커트 18,000원", "여성커트 25,000원", "시그니처커트 35,000원", "염색 50,000원~", "펌 70,000원~", "클리닉 30,000원~"],
+        amenities: ["예약 가능", "주차 가능"],
+        phone: "02-4567-8901", address: "서울시 강남구 역삼로 321", lat: 37.4998, lng: 127.0365,
+      },
+      {
+        id: 5, name: "공유마트", cat: "life", sub: "생필품 · 포인트 사용처", badge: "POINT", dist: "1.9km", score: "4.4", status: "pending", image: null,
+        businessHours: "07:00 ~ 23:00", closedDay: "없음", breakTime: null,
+        recommendedMenus: [], menus: ["생필품", "식료품", "음료", "과자", "냉동식품"],
+        amenities: ["포장 가능", "배달 가능", "주차 가능"],
+        phone: "02-5678-9012", address: "서울시 송파구 올림픽로 555",
+      },
+      {
+        id: 6, name: "기타상점 테스트", cat: "etc", sub: "샘플 상점 · 추후 교체", badge: "BETA", dist: "3.4km", score: "4.0", status: "approved", image: null,
+        businessHours: "정보 없음", closedDay: null, breakTime: null,
+        recommendedMenus: [], menus: [],
+        amenities: [],
+        phone: null, address: "서울시 테스트구 샘플로 999",
+      },
+    ],
+    []
+  );
+
+  // ★ 서버 데이터 + 정적 상점 병합 (서버 데이터가 먼저)
+  const allShops = useMemo(() => [...shops, ...staticShops], [shops, staticShops]);
+
+  // ★ 내 상가 ID 목록 (서버에서 가져온 myShops 기준)
+  const myShopIds = useMemo(() => {
+    return myShops.map(s => s.id || s.shopId);
+  }, [myShops]);
+
+  // ★ 다른 상가
+  const otherShops = useMemo(() => {
+    return allShops.filter(s => !myShopIds.includes(s.id));
+  }, [allShops, myShopIds]);
+
+  // ★ 내 상가를 최상단에 배치
+  const sortedShops = useMemo(() => {
+    return [...myShops, ...otherShops];
+  }, [myShops, otherShops]);
+
+  const filtered = useMemo(() => {
+    const qq = String(q || "").trim().toLowerCase();
+    return sortedShops.filter((s) => {
+      const okCat = cat === "all" ? true : s.cat === cat;
+      const okQ = !qq ? true : (s.name + " " + s.sub).toLowerCase().includes(qq);
+      return okCat && okQ;
+    });
+  }, [sortedShops, cat, q]);
+
+  // ★ 상점 등록 핸들러
+  const handleRegFormChange = (field) => (e) => {
+    setRegForm((prev) => ({ ...prev, [field]: e.target.value }));
+    setFormError("");
+  };
+
+  const handlePhotoChange = (e) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      const previewUrl = URL.createObjectURL(file);
+      setRegForm((prev) => ({ ...prev, photoFile: file, photoPreviewUrl: previewUrl }));
+    }
+  };
+
+  const validatePhone = (phone) => {
+    // 숫자와 하이픈만 허용, 최소 9자리
+    const cleaned = phone.replace(/[^0-9-]/g, "");
+    return cleaned.length >= 9 && /^[0-9-]+$/.test(phone);
+  };
+
+  const handleRegisterSubmit = async () => {
+    // 유효성 검사
+    if (!regForm.name.trim()) {
+      setFormError("상점명을 입력해주세요.");
+      return;
+    }
+    if (!regForm.category) {
+      setFormError("업종을 선택해주세요.");
+      return;
+    }
+    if (!regForm.ownerName.trim()) {
+      setFormError("대표자 이름을 입력해주세요.");
+      return;
+    }
+    if (!regForm.ownerPhone.trim()) {
+      setFormError("대표자 전화번호를 입력해주세요.");
+      return;
+    }
+    if (!validatePhone(regForm.ownerPhone)) {
+      setFormError("전화번호 형식이 올바르지 않습니다. (예: 010-1234-5678)");
+      return;
+    }
+
+    try {
+      const auth = getAuthInfo();
+      const memberId = auth?.memberId;
+      
+      // 새 상점 객체 생성
+      const newShop = {
+        name: regForm.name.trim(),
+        category: regForm.category,
+        sub: regForm.sub.trim() || "새로 등록된 상점",
+        status: "pending", // ★ 필수: 등록 시 pending
+        ownerName: regForm.ownerName.trim(),
+        ownerPhone: regForm.ownerPhone.trim(),
+        // photoFile은 별도 업로드 필요 (추후 구현)
+      };
+
+      // 서버에 저장
+      await storageAdapter.upsertShop(newShop, memberId);
+
+      // 리스트 새로고침
+      await loadShops();
+      await loadMyShops();
+
+      // 모달 닫기 및 폼 초기화
+      setShowModal(false);
+      setRegForm({
+        name: "",
+        category: "food",
+        sub: "",
+        ownerName: "",
+        ownerPhone: "",
+        photoFile: null,
+        photoPreviewUrl: null,
+      });
+      setFormError("");
+
+      // 완료 알림
+      window.alert("등록 완료(승인 대기중)");
+    } catch (error) {
+      console.error('[handleRegisterSubmit] Error:', error);
+      setFormError(error.message || '등록 중 오류가 발생했습니다.');
+    }
+  };
+
+  const handleModalClose = () => {
+    setShowModal(false);
+    setFormError("");
+    // photoPreviewUrl 해제
+    if (regForm.photoPreviewUrl) {
+      URL.revokeObjectURL(regForm.photoPreviewUrl);
+    }
+    setRegForm({
+      name: "",
+      category: "food",
+      sub: "",
+      ownerName: "",
+      ownerPhone: "",
+      photoFile: null,
+      photoPreviewUrl: null,
+    });
+  };
+
+  // ★ 수정 CTA 클릭 핸들러
+  const handleEditCtaClick = () => {
+    if (myShops.length === 0) return;
+
+    if (myShops.length === 1) {
+      // 소유 상가 1개: 즉시 수정 모달 오픈
+      openEditModal(myShops[0]);
+    } else {
+      // 소유 상가 다수: 선택 UI 표시
+      setShowShopPicker(true);
+    }
+  };
+
+  // ★ 수정 모달 열기
+  const openEditModal = (shop) => {
+    setEditingShop(shop);
+    setShowEditModal(true);
+    setShowShopPicker(false);
+  };
+
+  // ★ 수정 저장 (임시 - 실제 구현은 ShopEditModal에서)
+  const handleEditSave = async (updatedData) => {
+    try {
+      // TODO: await storageAdapter.upsertShop({ ...updatedData, id: editingShop.id });
+      setShowEditModal(false);
+      await loadShops();
+      window.alert('상점 정보가 수정되었습니다.');
+    } catch (error) {
+      console.error('[handleEditSave] Error:', error);
+      window.alert('수정 실패: ' + error.message);
+    }
+  };
+
+  // ---- 작은 인라인 스타일(기존 CSS 없더라도 보기 좋게) ----
+  const panelStyle = {
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 14,
+    border: "1px solid rgba(255,255,255,0.08)",
+    background: "rgba(255,255,255,0.04)",
+  };
+
+  const chipStyle = (on) => ({
+    padding: "8px 10px",
+    borderRadius: 999,
+    border: "1px solid rgba(255,255,255,0.10)",
+    background: on ? "rgba(255,255,255,0.14)" : "rgba(255,255,255,0.04)",
+    fontWeight: 900,
+    fontSize: 13,
+    whiteSpace: "nowrap",
+  });
+
+  const cardStyle = {
+    padding: 12,
+    borderRadius: 14,
+    border: "1px solid rgba(255,255,255,0.10)",
+    background: "rgba(0,0,0,0.10)",
+    textAlign: "left",
+  };
+
+  const badgeStyle = {
+    padding: "3px 8px",
+    borderRadius: 999,
+    border: "1px solid rgba(255,255,255,0.12)",
+    fontSize: 12,
+    opacity: 0.9,
+    whiteSpace: "nowrap",
+  };
+
+  return (
+    <div className="su-page">
+      {/* 헤더: 뒤로 + 제목 + 홈 */}
+      <header className="su-top" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button className="su-iconBtn" type="button" onClick={goBack} aria-label="뒤로">
+          ←
+        </button>
+        <div className="su-topTitle" style={{ flex: 1, fontWeight: 900 }}>
+          상권 / 혜택
+        </div>
+        <button className="su-pill" type="button" onClick={goHome}>
+          홈
+        </button>
+      </header>
+
+      {/* ★ 1. 검색 + 필터 */}
+      <section style={panelStyle}>
+        <div style={{ fontWeight: 900, marginBottom: 10 }}>🔎 상점 검색</div>
+
+        <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+          <input
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            placeholder="상점명/키워드 검색"
+            style={{
+              flex: 1,
+              padding: "10px 12px",
+              borderRadius: 12,
+              border: "1px solid rgba(255,255,255,0.10)",
+              background: "rgba(0,0,0,0.12)",
+              color: "inherit",
+              outline: "none",
+            }}
+          />
+          <button
+            type="button"
+            className="su-primaryBtn"
+            style={{ padding: "10px 12px" }}
+            onClick={() => window.alert("검색(추후 연결)")}
+          >
+            검색
+          </button>
+        </div>
+
+        {/* 카테고리 칩 */}
+        <div style={{ display: "flex", gap: 8, overflowX: "auto", marginTop: 10, paddingBottom: 2 }}>
+          {cats.map((c) => (
+            <button key={c.key} type="button" style={chipStyle(cat === c.key)} onClick={() => setCat(c.key)}>
+              {c.label}
+            </button>
+          ))}
+        </div>
+      </section>
+
+      {/* ★ 2. 상점 등록 CTA */}
+      <section style={{
+        ...panelStyle,
+        background: "linear-gradient(135deg, rgba(99,102,241,0.15) 0%, rgba(139,92,246,0.15) 100%)",
+        border: "1px solid rgba(99,102,241,0.3)",
+      }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12 }}>
+          <div>
+            <div style={{ fontWeight: 900, fontSize: 15 }}>🏪 내 상점 등록하기</div>
+            <div style={{ marginTop: 4, fontSize: 13, opacity: 0.85 }}>
+              지역 상권에 내 가게를 등록하고 홍보하세요
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              type="button"
+              className="su-primaryBtn"
+              style={{ padding: "10px 16px", whiteSpace: "nowrap" }}
+              onClick={() => setShowModal(true)}
+            >
+              등록하기
+            </button>
+            <button
+              type="button"
+              style={{
+                padding: "10px 16px",
+                whiteSpace: "nowrap",
+                borderRadius: 12,
+                border: "1px solid rgba(99,102,241,0.5)",
+                background: myShops.length > 0 ? "rgba(99,102,241,0.2)" : "rgba(255,255,255,0.05)",
+                color: myShops.length > 0 ? "#fff" : "rgba(255,255,255,0.4)",
+                fontWeight: 700,
+                cursor: myShops.length > 0 ? "pointer" : "not-allowed",
+                fontSize: 14,
+              }}
+              onClick={handleEditCtaClick}
+              disabled={myShops.length === 0}
+            >
+              수정하기
+            </button>
+          </div>
+        </div>
+      </section>
+
+      {/* ★ 3. 상점 리스트 (스크롤 가능) */}
+      <section style={panelStyle}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+          <div style={{ fontWeight: 900 }}>📋 상점 리스트</div>
+          <div style={{ fontSize: 12, opacity: 0.75 }}>
+            {filtered.length}개
+          </div>
+        </div>
+
+        {loading ? (
+          <div style={{ textAlign: "center", padding: 30, color: "#999" }}>
+            ⏳ 데이터 로딩 중...
+          </div>
+        ) : (
+          <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+            {filtered.map((s) => {
+            const isApproved = s.status === "approved";
+            const isPending = s.status === "pending";
+            const isMyShop = myShopIds.includes(s.id);
+
+            // 클릭 핸들러: 승인 전이면 진입 차단, 승인 후면 상세 진입
+            const handleCardClick = () => {
+              if (isPending) {
+                window.alert("관리자 승인 후 이용 가능합니다");
+                return;
+              }
+              // 승인된 상점은 상세 페이지로 이동
+              navigate(`/shops/${s.id}`, { state: { shop: s } });
+            };
+
+            return (
+              <button
+                key={s.id}
+                type="button"
+                style={{
+                  ...cardStyle,
+                  opacity: isPending ? 0.7 : 1,
+                  cursor: isPending ? "not-allowed" : "pointer",
+                  border: isMyShop ? "2px solid rgba(99,102,241,0.6)" : cardStyle.border,
+                  background: isMyShop ? "linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.1))" : cardStyle.background,
+                }}
+                onClick={handleCardClick}
+              >
+                <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                    <span style={{ fontWeight: 900 }}>{s.name}</span>
+                    {isMyShop && (
+                      <span style={{ 
+                        fontSize: 11, 
+                        padding: "2px 6px", 
+                        borderRadius: 4, 
+                        background: "rgba(99,102,241,0.8)", 
+                        color: "#fff",
+                        fontWeight: 700,
+                      }}>
+                        내 가게
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+                    {isPending ? (
+                      <span style={{ ...badgeStyle, background: "rgba(255,165,0,0.2)", color: "#ffa500" }}>대기중</span>
+                    ) : (
+                      <span style={badgeStyle}>{s.badge}</span>
+                    )}
+                    <span style={{ fontSize: 12, opacity: 0.8 }}>⭐ {s.score}</span>
+                  </div>
+                </div>
+
+                <div style={{ marginTop: 6, fontSize: 13, opacity: 0.85 }}>{s.sub}</div>
+
+                <div style={{ marginTop: 8, display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12, opacity: 0.8 }}>
+                  <span>거리 {s.dist}</span>
+                  <span style={{ padding: "3px 8px", borderRadius: 999, border: "1px solid rgba(255,255,255,0.10)" }}>
+                    {catLabel(s.cat)}
+                  </span>
+                </div>
+
+                {/* 이미지/썸네일 영역: 승인 상태에 따라 분기 */}
+                <div
+                  style={{
+                    marginTop: 10,
+                    height: 92,
+                    borderRadius: 12,
+                    border: isPending ? "1px dashed rgba(255,165,0,0.4)" : "1px dashed rgba(255,255,255,0.18)",
+                    background: isPending ? "rgba(255,165,0,0.05)" : "transparent",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    opacity: 0.7,
+                    fontSize: 12,
+                  }}
+                >
+                  {isPending ? (
+                    <span style={{ color: "#ffa500", fontWeight: 700 }}>🔒 등록준비중</span>
+                  ) : s.image ? (
+                    <img src={s.image} alt={s.name} style={{ width: "100%", height: "100%", objectFit: "cover", borderRadius: 12 }} />
+                  ) : (
+                    <span>이미지/썸네일 영역(추후)</span>
+                  )}
+                </div>
+              </button>
+            );
+          })}
+
+          {filtered.length === 0 && (
+            <div style={{ ...cardStyle, opacity: 0.85 }}>
+              조건에 맞는 상점이 없어요. (카테고리/검색어를 바꿔보세요)
+            </div>
+          )}
+          </div>
+        )}
+
+        <button
+          type="button"
+          className="su-primaryBtn"
+          style={{ marginTop: 12, width: "100%" }}
+          onClick={() => window.alert("리스트 더보기(추후 연결)")}
+        >
+          더보기
+        </button>
+      </section>
+
+      {/* ★ 4. 혜택/VIP 배너 (하단 부가 정보) */}
+      <section style={panelStyle}>
+        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, alignItems: "center" }}>
+          <div style={{ fontWeight: 900 }}>🎁 혜택 / VIP</div>
+          <button
+            type="button"
+            className="su-pill"
+            onClick={() => window.alert("혜택 상세(추후 연결)")}
+            style={{ padding: "8px 10px" }}
+          >
+            더보기 →
+          </button>
+        </div>
+
+        <div
+          style={{
+            marginTop: 10,
+            borderRadius: 14,
+            border: "1px solid rgba(255,255,255,0.10)",
+            background: "rgba(255,255,255,0.06)",
+            padding: 12,
+          }}
+        >
+          <div style={{ fontWeight: 900 }}>이번 주 추천 혜택</div>
+          <div style={{ marginTop: 6, fontSize: 13, opacity: 0.85, lineHeight: 1.5 }}>
+            • 제휴 상점 방문 시 포인트 적립<br />
+            • VIP 쿠폰(테스트) 배포 예정<br />
+            • 참여 밋션 완료 시 추가 혜택
+          </div>
+        </div>
+      </section>
+
+      <div style={{ height: 90 }} />
+
+      {/* ★ 상가 선택 모달 (다수 소유 시) */}
+      {showShopPicker && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 9999,
+            background: "rgba(0,0,0,0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+          onClick={() => setShowShopPicker(false)}
+        >
+          <div
+            style={{
+              background: "#1a1a2e",
+              borderRadius: 16,
+              width: "100%",
+              maxWidth: 400,
+              maxHeight: "70vh",
+              overflowY: "auto",
+              padding: 20,
+              border: "1px solid rgba(99,102,241,0.3)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: "0 0 16px", fontSize: 18, fontWeight: 900, textAlign: "center" }}>
+              수정할 상가를 선택하세요
+            </h3>
+
+            <div style={{ display: "grid", gap: 10 }}>
+              {myShops.map((shop) => (
+                <button
+                  key={shop.id}
+                  type="button"
+                  onClick={() => openEditModal(shop)}
+                  style={{
+                    padding: 14,
+                    borderRadius: 12,
+                    border: "1px solid rgba(99,102,241,0.4)",
+                    background: "rgba(99,102,241,0.1)",
+                    textAlign: "left",
+                    cursor: "pointer",
+                    transition: "all 0.2s",
+                  }}
+                  onMouseEnter={(e) => {
+                    e.currentTarget.style.background = "rgba(99,102,241,0.2)";
+                    e.currentTarget.style.borderColor = "rgba(99,102,241,0.6)";
+                  }}
+                  onMouseLeave={(e) => {
+                    e.currentTarget.style.background = "rgba(99,102,241,0.1)";
+                    e.currentTarget.style.borderColor = "rgba(99,102,241,0.4)";
+                  }}
+                >
+                  <div style={{ fontWeight: 900, fontSize: 15 }}>{shop.name}</div>
+                  <div style={{ marginTop: 4, fontSize: 13, opacity: 0.8 }}>{shop.sub}</div>
+                  <div style={{ marginTop: 6, fontSize: 12, opacity: 0.6 }}>
+                    {catLabel(shop.cat)} · {shop.status === "pending" ? "승인대기" : "승인완료"}
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            <button
+              type="button"
+              onClick={() => setShowShopPicker(false)}
+              style={{
+                marginTop: 16,
+                width: "100%",
+                padding: "12px",
+                borderRadius: 10,
+                border: "1px solid rgba(255,255,255,0.1)",
+                background: "transparent",
+                color: "#fff",
+                fontWeight: 700,
+                cursor: "pointer",
+              }}
+            >
+              취소
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* ★ 수정 모달 */}
+      {showEditModal && editingShop && (
+        <ShopEditModal
+          shop={editingShop}
+          onClose={() => setShowEditModal(false)}
+          onSaved={async () => {
+            await loadShops();
+            await loadMyShops();
+          }}
+        />
+      )}
+
+      {/* ★ 상점 등록 모달 */}
+      {showModal && (
+        <div
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 9999,
+            background: "rgba(0,0,0,0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 16,
+          }}
+          onClick={handleModalClose}
+        >
+          <div
+            style={{
+              background: "#1a1a2e",
+              borderRadius: 16,
+              width: "100%",
+              maxWidth: 400,
+              maxHeight: "85vh",
+              overflowY: "auto",
+              padding: 20,
+              border: "1px solid rgba(255,255,255,0.1)",
+            }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 style={{ margin: "0 0 16px", fontSize: 18, fontWeight: 900, textAlign: "center" }}>
+              🏪 상점 등록
+            </h3>
+
+            {/* 에러 메시지 */}
+            {formError && (
+              <div style={{
+                background: "rgba(239,68,68,0.15)",
+                border: "1px solid rgba(239,68,68,0.3)",
+                borderRadius: 8,
+                padding: "10px 12px",
+                marginBottom: 12,
+                color: "#ef4444",
+                fontSize: 13,
+                fontWeight: 600,
+              }}>
+                {formError}
+              </div>
+            )}
+
+            {/* 상점명 (필수) */}
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: "block", marginBottom: 4, fontSize: 13, fontWeight: 700 }}>
+                상점명 <span style={{ color: "#ef4444" }}>*</span>
+              </label>
+              <input
+                type="text"
+                value={regForm.name}
+                onChange={handleRegFormChange("name")}
+                placeholder="상점명을 입력하세요"
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  background: "rgba(0,0,0,0.2)",
+                  color: "#fff",
+                  outline: "none",
+                }}
+              />
+            </div>
+
+            {/* 업종 (필수) */}
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: "block", marginBottom: 4, fontSize: 13, fontWeight: 700 }}>
+                업종 <span style={{ color: "#ef4444" }}>*</span>
+              </label>
+              <select
+                value={regForm.category}
+                onChange={handleRegFormChange("category")}
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  background: "rgba(0,0,0,0.2)",
+                  color: "#fff",
+                  outline: "none",
+                }}
+              >
+                <option value="food">음식</option>
+                <option value="cafe">카페</option>
+                <option value="life">생활</option>
+                <option value="beauty">뷰티</option>
+                <option value="etc">기타</option>
+              </select>
+            </div>
+
+            {/* 한줄 소개 (선택) */}
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: "block", marginBottom: 4, fontSize: 13, fontWeight: 700 }}>
+                한줄 소개
+              </label>
+              <input
+                type="text"
+                value={regForm.sub}
+                onChange={handleRegFormChange("sub")}
+                placeholder="간단한 소개 (선택)"
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  background: "rgba(0,0,0,0.2)",
+                  color: "#fff",
+                  outline: "none",
+                }}
+              />
+            </div>
+
+            {/* 대표자 이름 (필수) */}
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: "block", marginBottom: 4, fontSize: 13, fontWeight: 700 }}>
+                대표자 이름 <span style={{ color: "#ef4444" }}>*</span>
+              </label>
+              <input
+                type="text"
+                value={regForm.ownerName}
+                onChange={handleRegFormChange("ownerName")}
+                placeholder="대표자 이름"
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  background: "rgba(0,0,0,0.2)",
+                  color: "#fff",
+                  outline: "none",
+                }}
+              />
+            </div>
+
+            {/* 대표자 전화번호 (필수) */}
+            <div style={{ marginBottom: 12 }}>
+              <label style={{ display: "block", marginBottom: 4, fontSize: 13, fontWeight: 700 }}>
+                대표자 전화번호 <span style={{ color: "#ef4444" }}>*</span>
+              </label>
+              <input
+                type="tel"
+                value={regForm.ownerPhone}
+                onChange={handleRegFormChange("ownerPhone")}
+                placeholder="010-1234-5678"
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  background: "rgba(0,0,0,0.2)",
+                  color: "#fff",
+                  outline: "none",
+                }}
+              />
+            </div>
+
+            {/* 사진 등록 (선택) */}
+            <div style={{ marginBottom: 16 }}>
+              <label style={{ display: "block", marginBottom: 4, fontSize: 13, fontWeight: 700 }}>
+                상점 사진 (선택)
+              </label>
+              <input
+                ref={photoInputRef}
+                type="file"
+                accept="image/*"
+                onChange={handlePhotoChange}
+                style={{ display: "none" }}
+              />
+              <button
+                type="button"
+                onClick={() => photoInputRef.current?.click()}
+                style={{
+                  width: "100%",
+                  padding: "10px 12px",
+                  borderRadius: 10,
+                  border: "1px dashed rgba(255,255,255,0.2)",
+                  background: "rgba(0,0,0,0.1)",
+                  color: "rgba(255,255,255,0.7)",
+                  cursor: "pointer",
+                }}
+              >
+                📷 사진 업로드
+              </button>
+
+              {/* 사진 미리보기 */}
+              {regForm.photoPreviewUrl && (
+                <div style={{ marginTop: 10, position: "relative" }}>
+                  <img
+                    src={regForm.photoPreviewUrl}
+                    alt="미리보기"
+                    style={{
+                      width: "100%",
+                      height: 120,
+                      objectFit: "cover",
+                      borderRadius: 10,
+                      border: "1px solid rgba(255,255,255,0.1)",
+                    }}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      URL.revokeObjectURL(regForm.photoPreviewUrl);
+                      setRegForm((prev) => ({ ...prev, photoFile: null, photoPreviewUrl: null }));
+                    }}
+                    style={{
+                      position: "absolute",
+                      top: 6,
+                      right: 6,
+                      width: 24,
+                      height: 24,
+                      borderRadius: "50%",
+                      background: "rgba(0,0,0,0.7)",
+                      border: "none",
+                      color: "#fff",
+                      cursor: "pointer",
+                      fontSize: 14,
+                    }}
+                  >
+                    ✕
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* 안내 문구 */}
+            <div style={{
+              background: "rgba(99,102,241,0.1)",
+              borderRadius: 8,
+              padding: 10,
+              marginBottom: 16,
+              fontSize: 12,
+              color: "rgba(255,255,255,0.7)",
+              lineHeight: 1.5,
+            }}>
+              ℹ️ 등록 후 관리자 승인을 거쳐 상점이 공개됩니다.<br />
+              승인 전까지 상점 상세 진입이 제한됩니다.
+            </div>
+
+            {/* 버튼 */}
+            <div style={{ display: "flex", gap: 10 }}>
+              <button
+                type="button"
+                onClick={handleModalClose}
+                style={{
+                  flex: 1,
+                  padding: "12px",
+                  borderRadius: 10,
+                  border: "1px solid rgba(255,255,255,0.1)",
+                  background: "transparent",
+                  color: "#fff",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                취소
+              </button>
+              <button
+                type="button"
+                onClick={handleRegisterSubmit}
+                style={{
+                  flex: 1,
+                  padding: "12px",
+                  borderRadius: 10,
+                  border: "none",
+                  background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
+                  color: "#fff",
+                  fontWeight: 700,
+                  cursor: "pointer",
+                }}
+              >
+                등록하기
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function catLabel(c) {
+  if (c === "food") return "음식";
+  if (c === "cafe") return "카페";
+  if (c === "life") return "생활";
+  if (c === "beauty") return "뷰티";
+  return "기타";
+}

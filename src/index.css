@@ -1,0 +1,412 @@
+:root {
+  font-family: system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+
+  color-scheme: light dark;
+  color: rgba(255, 255, 255, 0.87);
+  background-color: #242424;
+
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+a {
+  font-weight: 500;
+  color: #646cff;
+  text-decoration: inherit;
+}
+a:hover {
+  color: #535bf2;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+
+  /* ✅ 화면 비는/가운데 정렬 문제 방지 */
+  display: block;
+}
+
+/* ★ input/textarea/select 텍스트: su-app 스코프에서는 App.css가 제어, 구 다크 컨테스트 전용 */
+:not(.su-app) input:not(.su-app *),
+:not(.su-app) textarea:not(.su-app *),
+:not(.su-app) select:not(.su-app *) {
+  color: #fff;
+}
+
+/* ★ 드롭다운 내부 option 텍스트 가독성 개선 */
+option {
+  background: #1a1a20;
+  color: #fff;
+}
+
+/* ★ 흠샐 배경 input/textarea는 검은색 글씨 */
+input[style*="background: rgba(0,0,0,0.2)"],
+input[style*="background: rgba(0,0,0,0.15)"],
+textarea[style*="background: rgba(0,0,0,0.2)"],
+textarea[style*="background: rgba(0,0,0,0.15)"] {
+  color: #fff !important;
+}
+
+/* ★ placeholder 색상 — su-app 스코프 밖 다크 컨테스트 전용 */
+:not(.su-app) input::placeholder,
+:not(.su-app) textarea::placeholder {
+  color: rgba(255, 255, 255, 0.5);
+  opacity: 1;
+}
+
+
+h1 {
+  font-size: 3.2em;
+  line-height: 1.1;
+}
+
+button {
+  border-radius: 8px;
+  border: 1px solid transparent;
+  padding: 0.6em 1.2em;
+  font-size: 1em;
+  font-weight: 500;
+  font-family: inherit;
+  background-color: #1a1a1a;
+  cursor: pointer;
+  transition: border-color 0.25s;
+}
+button:hover {
+  border-color: #646cff;
+}
+button:focus,
+button:focus-visible {
+  outline: 4px auto -webkit-focus-ring-color;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    color: #213547;
+    background-color: #ffffff;
+  }
+  a:hover {
+    color: #747bff;
+  }
+  button {
+    background-color: #f9f9f9;
+  }
+}
+/* =========================
+   HOME Dashboard Theme
+========================= */
+.su-home{
+  max-width: 420px;          /* ✅ 모바일 앱 기준(참고 이미지 느낌) */
+  margin: 0 auto;
+}
+
+.su-top--home{
+  border-radius: 22px;
+  padding: 12px 12px;
+}
+
+.su-brandRow{
+  display:flex;
+  align-items:center;
+  gap:10px;
+}
+/* .su-logoMark 크기는 src/styles/App.css에서 관리 (중복 정의 제거) */
+
+.su-pillGroup{
+  display:flex;
+  gap:8px;
+  margin-right: 8px;
+}
+.su-pill{
+  height: 34px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,.04);
+  font-size: 12px;
+  color: rgba(255,255,255,.8);
+}
+
+/* HERO 2 */
+.su-hero2{
+  position:relative;
+  margin-top: 14px;
+  border-radius: 26px;
+  border: 1px solid var(--border);
+  background:
+    radial-gradient(420px 260px at 50% 20%, rgba(140,180,255,.20), transparent 60%),
+    radial-gradient(420px 260px at 70% 30%, rgba(120,255,210,.12), transparent 60%),
+    rgba(255,255,255,.03);
+  padding: 18px 14px 16px;
+  overflow:hidden;
+}
+.su-cityGlow{
+  position:absolute;
+  left:50%;
+  transform: translateX(-50%);
+  top: -18px;
+  width: 280px;
+  height: 180px;
+  border-radius: 28px;
+  background:
+    radial-gradient(closest-side, rgba(90,170,255,.30), transparent 70%),
+    radial-gradient(closest-side, rgba(180,120,255,.18), transparent 70%);
+  filter: blur(6px);
+  opacity:.85;
+}
+.su-hero2__title{
+  position:relative;
+  text-align:center;
+  font-weight: 900;
+  font-size: 18px;
+  letter-spacing: -.2px;
+  margin-top: 96px; /* ✅ 상단 비주얼 공간 */
+  margin-bottom: 12px;
+}
+
+.su-searchBar{
+  position:relative;
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  padding: 10px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(0,0,0,.20);
+}
+.su-searchIcon{ opacity:.8; }
+.su-searchInput{
+  flex:1;
+  border:0;
+  outline:0;
+  background: transparent;
+  color: rgba(255,255,255,.92);
+  font-size: 13px;
+}
+.su-searchInput::placeholder{ color: rgba(255,255,255,.38); }
+.su-searchBtn{
+  height: 34px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(140,180,255,.28);
+  background: rgba(140,180,255,.14);
+  font-size: 12px;
+}
+
+/* Tiles Grid */
+.su-tiles{
+  margin-top: 14px;
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.su-tile{
+  min-height: 92px;
+  border-radius: 20px;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.03);
+  display:flex;
+  gap: 10px;
+  padding: 14px 12px;
+  text-align:left;
+}
+.su-tile__icon{
+  width: 44px; height: 44px;
+  border-radius: 16px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(0,0,0,.20);
+  font-size: 18px;
+}
+.su-tile__title{ font-weight: 900; font-size: 14px; }
+.su-tile__sub{ margin-top: 4px; font-size: 12px; color: var(--muted); line-height: 1.25; }
+
+.su-tile--cyan  { box-shadow: 0 0 0 1px rgba(120,255,210,.28) inset; background: linear-gradient(135deg, rgba(120,255,210,.10), rgba(120,255,210,.02)); }
+.su-tile--teal  { box-shadow: 0 0 0 1px rgba(60,220,255,.28) inset;  background: linear-gradient(135deg, rgba(60,220,255,.10), rgba(60,220,255,.02)); }
+.su-tile--purple{ box-shadow: 0 0 0 1px rgba(180,120,255,.30) inset; background: linear-gradient(135deg, rgba(180,120,255,.12), rgba(180,120,255,.02)); }
+.su-tile--blue  { box-shadow: 0 0 0 1px rgba(120,180,255,.30) inset; background: linear-gradient(135deg, rgba(120,180,255,.12), rgba(120,180,255,.02)); }
+.su-tile--orange{ box-shadow: 0 0 0 1px rgba(255,170,90,.28) inset;  background: linear-gradient(135deg, rgba(255,170,90,.10), rgba(255,170,90,.02)); }
+.su-tile--pink  { box-shadow: 0 0 0 1px rgba(255,120,180,.28) inset; background: linear-gradient(135deg, rgba(255,120,180,.10), rgba(255,120,180,.02)); }
+
+/* Panel */
+.su-panel{
+  margin-top: 14px;
+  border-radius: 26px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,.03);
+  padding: 14px 14px 12px;
+}
+.su-panelHead{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 10px;
+}
+.su-panelTitle{
+  font-weight: 900;
+  font-size: 15px;
+}
+.su-panelMore{
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.04);
+  padding: 8px 10px;
+  border-radius: 14px;
+  font-size: 12px;
+  color: rgba(255,255,255,.86);
+}
+
+.su-noticeBody{
+  margin-top: 10px;
+  padding: 10px 10px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(0,0,0,.18);
+}
+.su-noticeMeta{
+  display:flex;
+  align-items:center;
+  gap: 8px;
+  color: rgba(255,255,255,.7);
+  font-size: 12px;
+}
+.su-avatar{
+  width: 26px; height: 26px;
+  border-radius: 12px;
+  display:flex; align-items:center; justify-content:center;
+  border: 1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.04);
+}
+.su-dot{ opacity:.55; }
+.su-noticeText{
+  margin-top: 8px;
+  font-size: 12px;
+  color: rgba(255,255,255,.78);
+  line-height: 1.45;
+}
+
+/* Shortcuts inside panel */
+.su-shortRow{
+  margin-top: 12px;
+  display:grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+.su-short{
+  height: 52px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.03);
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  padding: 0 12px;
+  text-align:left;
+}
+.su-shortIcon{
+  width: 28px; height: 28px;
+  border-radius: 12px;
+  display:flex; align-items:center; justify-content:center;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(0,0,0,.18);
+  font-size: 13px;
+}
+.su-shortText{ font-weight: 900; font-size: 13px; }
+
+.su-short--purple{ box-shadow: 0 0 0 1px rgba(180,120,255,.15) inset; }
+.su-short--teal  { box-shadow: 0 0 0 1px rgba(120,255,210,.12) inset; }
+.su-short--blue  { box-shadow: 0 0 0 1px rgba(120,180,255,.12) inset; }
+.su-short--orange{ box-shadow: 0 0 0 1px rgba(255,170,90,.12) inset; }
+
+/* Live rail (짧게 2~3개만, 메인용) */
+.su-panel--live{ padding-bottom: 10px; }
+.su-liveRail{
+  margin-top: 10px;
+  display:flex;
+  gap: 10px;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  padding-bottom: 6px;
+}
+.su-liveRail::-webkit-scrollbar{ height: 0px; }
+
+.su-liveCard{
+  flex: 0 0 auto;
+  width: 220px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(0,0,0,.18);
+  padding: 12px 12px;
+  text-align:left;
+}
+.su-liveBadge{
+  display:inline-block;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.04);
+  font-size: 11px;
+  color: rgba(255,255,255,.8);
+}
+.su-liveTitle{
+  margin-top: 10px;
+  font-weight: 900;
+  font-size: 13px;
+}
+.su-liveSub{
+  margin-top: 6px;
+  font-size: 12px;
+  color: rgba(255,255,255,.65);
+}
+/* ✅ 모바일 좌우 흔들림(가로 스크롤) 완전 차단 */
+html, body {
+  width: 100%;
+  overflow-x: hidden;
+}
+/* ✅ 라우터/해시 공통: 루트 높이 보장 (화면 비는 현상 방지) */
+html, body, #root {
+  width: 100%;
+  height: 100%;
+}
+
+#root {
+  width: 100%;
+  overflow-x: hidden;
+}
+
+/* ✅ 홈은 420 고정이 아니라 "최대 420" */
+.su-home {
+  width: 100%;
+  max-width: 420px;
+  margin: 0 auto;
+}
+
+/* ✅ 모든 요소가 너비 넘치면 포함되도록 */
+* {
+  box-sizing: border-box;
+}
+
+/* ────────── 마이오피스 명함 모바일 레이아웃 ────────── */
+@media (max-width: 640px) {
+  .su-card-actions {
+    display: grid !important;
+    grid-template-columns: repeat(3, 1fr) !important;
+    gap: 8px !important;
+  }
+  
+  .su-card-actions button:nth-child(1),
+  .su-card-actions button:nth-child(2),
+  .su-card-actions button:nth-child(3) {
+    grid-column: span 1;
+  }
+  
+  .su-card-actions button:nth-child(4) {
+    grid-column: span 3;
+  }
+}
+

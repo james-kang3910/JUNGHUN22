@@ -1,0 +1,1701 @@
+import React, { useState, useMemo, useEffect, useRef } from "react";
+import { useNavigate } from "react-router-dom";
+import { isLoggedIn, getSession, getAuthInfo, getMembers } from "../lib/authStore";
+import { POINT_TYPE_LABELS } from "../lib/pointStore";
+import { getPointBalance, getPointHistory } from "../lib/storageAdapter";
+import * as supplyService from "../lib/supplyService";
+import * as storageAdapter from "../lib/storageAdapter";
+import { isPointsTransferEnabled } from "../lib/pointsGuard";
+import * as scheduleService from "../lib/scheduleService";
+import * as friendService from "../lib/friendService";
+import Toast from "../components/Toast";
+import QRCode from "qrcode";
+
+// ★ 관리자 여부 확인 함수
+function checkIsAdmin() {
+  try {
+    if (localStorage.getItem("isAdmin") === "true") {
+      return true;
+    }
+    const userStr = localStorage.getItem("su_auth_v2");
+    if (userStr) {
+      const user = JSON.parse(userStr);
+      if (user.role === "admin") {
+        return true;
+      }
+    }
+    return false;
+  } catch (e) {
+    return false;
+  }
+}
+
+function formatNumber(n) {
+  try {
+    return Number(n).toLocaleString();
+  } catch (e) {
+    return String(n);
+  }
+}
+
+export default function My() {
+  const navigate = useNavigate();
+
+  // ★ 비로그인 시 로그인 페이지로 리다이렉트 (returnTo 포함)
+  useEffect(() => {
+    if (!isLoggedIn()) {
+      navigate("/auth", { replace: true, state: { returnTo: "/my" } });
+    }
+  }, [navigate]);
+
+  // 로그인 체크 중 렌더링 방지
+  if (!isLoggedIn()) {
+    return null;
+  }
+
+  // ────────── 실제 회원 정보 (authStore에서 가져오기) ──────────
+  const authInfo = getAuthInfo();
+  const [userData] = useState({
+    name: authInfo?.name || authInfo?.nickname || "회원",
+    nickname: authInfo?.nickname || "",
+    phone: authInfo?.phone || "",
+    region: authInfo?.region || "",
+    joinDate: authInfo?.createdAt ? authInfo.createdAt.split("T")[0] : new Date().toISOString().split("T")[0],
+    profileImage: null,
+  });
+
+  // ★ 포인트 데이터 - 서버 API 연동
+  const session = getSession();
+  const currentUserId = session?.memberId || null;
+  
+  const [pointData, setPointData] = useState({
+    balance: 0,
+    history: [],
+  });
+
+  // 포인트 데이터 로드 (서버 API)
+  useEffect(() => {
+    let mounted = true;
+    async function loadPoints() {
+      if (!currentUserId) {
+        setPointData({ balance: 0, history: [] });
+        return;
+      }
+      try {
+        const balanceRes = await getPointBalance(currentUserId);
+        const historyRes = await getPointHistory(currentUserId, { limit: 50 });
+        if (mounted) {
+          setPointData({ 
+            balance: balanceRes.balance || 0, 
+            history: historyRes.history || [] 
+          });
+        }
+      } catch (e) {
+        console.error("[My] Failed to load points:", e);
+        if (mounted) setPointData({ balance: 0, history: [] });
+      }
+    }
+    loadPoints();
+    return () => { mounted = false; };
+  }, [currentUserId]);
+
+  // ★ 일정 데이터 - 서버 API 연동
+  const [scheduleData, setScheduleData] = useState({ today: [], upcoming: [] });
+  
+  useEffect(() => {
+    let mounted = true;
+    async function loadSchedules() {
+      if (!currentUserId) {
+        setScheduleData({ today: [], upcoming: [] });
+        return;
+      }
+      try {
+        const schedules = await scheduleService.getSchedules(currentUserId);
+        const today = new Date().toISOString().split('T')[0];
+        
+        const todaySchedules = schedules.filter(s => s.scheduleDate === today);
+        const upcomingSchedules = schedules.filter(s => s.scheduleDate > today);
+        
+        if (mounted) {
+          setScheduleData({ 
+            today: todaySchedules.map(s => ({ id: s.id, title: s.title, time: s.scheduleTime || '' })),
+            upcoming: upcomingSchedules.map(s => ({ id: s.id, title: s.title, date: s.scheduleDate }))
+          });
+        }
+      } catch (e) {
+        console.error('[My] Failed to load schedules:', e);
+        if (mounted) setScheduleData({ today: [], upcoming: [] });
+      }
+    }
+    loadSchedules();
+    
+    const onUpdate = () => { loadSchedules(); };
+    window.addEventListener('su:ssot:changed', onUpdate);
+    return () => { 
+      mounted = false; 
+      window.removeEventListener('su:ssot:changed', onUpdate);
+    };
+  }, [currentUserId]);
+
+  const [supplyData] = useState({
+    requests: [
+      { id: 1, item: "홍보물품 세트", status: "승인완료", date: "2026-01-15" },
+      { id: 2, item: "이벤트 굿즈", status: "배송중", date: "2026-01-18" },
+    ],
+    purchases: [
+      { id: 1, item: "공유국밥", amount: 9000, status: "완료", date: "2026-01-19" },
+      { id: 2, item: "동네카페 라떼", amount: 5500, status: "완료", date: "2026-01-16" },
+    ],
+  });
+
+  // ★ 친구 데이터 - 서버 API 연동
+  const [friendData, setFriendData] = useState({ count: 0, list: [] });
+  
+  useEffect(() => {
+    let mounted = true;
+    async function loadFriends() {
+      if (!currentUserId) {
+        setFriendData({ count: 0, list: [] });
+        return;
+      }
+      try {
+        const friendIds = await friendService.getFriends(currentUserId);
+        const members = getMembers() || [];
+        const friendsList = friendIds.map(fid => {
+          const member = members.find(m => (m.id === fid || m.memberId === fid));
+          return member ? { 
+            id: member.id || member.memberId, 
+            name: member.name || member.nickname, 
+            joinDate: member.createdAt?.split('T')[0] || '-'
+          } : { id: fid, name: '사용자', joinDate: '-' };
+        });
+        
+        if (mounted) {
+          setFriendData({ count: friendsList.length, list: friendsList });
+        }
+      } catch (e) {
+        console.error('[My] Failed to load friends:', e);
+        if (mounted) setFriendData({ count: 0, list: [] });
+      }
+    }
+    loadFriends();
+    
+    const onUpdate = () => { loadFriends(); };
+    window.addEventListener('su:ssot:changed', onUpdate);
+    window.addEventListener('su_friends:updated', onUpdate);
+    return () => { 
+      mounted = false; 
+      window.removeEventListener('su:ssot:changed', onUpdate);
+      window.removeEventListener('su_friends:updated', onUpdate);
+    };
+  }, [currentUserId]);
+
+  const [assistantData] = useState({
+    interestRegions: ["강남구", "서초구"],
+    interestCategories: ["맛집", "카페", "이벤트"],
+    notifications: {
+      mission: true,
+      event: true,
+      point: false,
+    },
+    recentActivity: {
+      missions: ["공유방송 시청", "리뷰 작성", "출석체크"],
+      shops: ["공유국밥", "동네카페 라떼", "뷰티살롱 S"],
+      recommendations: ["이번주 HOT 밋션", "신규 상점 추천", "포인트 2배 이벤트"],
+    },
+  });
+
+  // ★ 관리자 여부 상태
+  const [isAdmin, setIsAdmin] = useState(false);
+  useEffect(() => {
+    setIsAdmin(checkIsAdmin());
+  }, []);
+
+  // ★ 보급지원 담당자 여부 확인
+  const [isSupplyManager, setIsSupplyManager] = useState(false);
+  const [offers, setOffers] = useState([]);
+  const [mySupplyRequests, setMySupplyRequests] = useState([]);
+
+  useEffect(() => {
+    // supplyManager 플래그 확인 (로컬 -> 서버 페일백) 및 SSOT 변경 감시
+    let mounted = true;
+    async function checkSupplyManager() {
+      try {
+        const members = getMembers() || [];
+        let currentMember = members.find(m => (m.id === currentUserId || m.memberId === currentUserId));
+
+        // 로컬에 멤버 정보가 없거나 supplyManager 필드가 누락된 경우 서버에서 확인
+        if ((!currentMember || currentMember.supplyManager === undefined) && currentUserId) {
+          try {
+            const serverMembers = await storageAdapter.getMembers();
+            if (Array.isArray(serverMembers) && serverMembers.length > 0) {
+              currentMember = currentMember || serverMembers.find(m => (m.id === currentUserId || m.memberId === currentUserId));
+            }
+          } catch (e) {
+            // 서버 미사용 환경에서는 무시
+          }
+        }
+
+        if (!mounted) return;
+        setIsSupplyManager(!!(currentMember && currentMember.supplyManager));
+      } catch (e) {
+        if (mounted) setIsSupplyManager(false);
+      }
+    }
+
+    checkSupplyManager();
+
+    const onSsot = () => { checkSupplyManager(); };
+    window.addEventListener('su:ssot:changed', onSsot);
+    window.addEventListener('supply:updated', onSsot);
+    return () => { mounted = false; window.removeEventListener('su:ssot:changed', onSsot); window.removeEventListener('supply:updated', onSsot); };
+
+    // 자신이 등록한 보급품 목록 로드
+    async function loadOffers() {
+      if (currentUserId) {
+        try {
+          const ofs = await supplyService.getOffers(currentUserId);
+          setOffers(Array.isArray(ofs) ? ofs : []);
+        } catch (e) {
+          setOffers([]);
+        }
+      }
+    }
+    
+    // 자신에게 들어온 신청 목록 로드
+    async function loadRequests() {
+      if (currentUserId) {
+        try {
+          const all = await supplyService.getAll();
+          const reqs = all.filter(x => x.type === 'request' && x.userId === currentUserId);
+          setMySupplyRequests(reqs);
+        } catch (e) {
+          setMySupplyRequests([]);
+        }
+      }
+    }
+
+    loadOffers();
+    loadRequests();
+
+    // 이벤트 리스너
+    const onUpdate = () => {
+      loadOffers();
+      loadRequests();
+    };
+    window.addEventListener('supply:updated', onUpdate);
+    window.addEventListener('su:ssot:changed', onUpdate);
+    return () => {
+      window.removeEventListener('supply:updated', onUpdate);
+      window.removeEventListener('su:ssot:changed', onUpdate);
+    };
+  }, [currentUserId]);
+
+  // ★ 보급품 등록 모달 상태
+  const [offerFormOpen, setOfferFormOpen] = useState(false);
+  const [offerForm, setOfferForm] = useState({
+    id: null,
+    item: '',
+    manager: '',
+    contact: '',
+    price: '',
+    detail: '',
+    image: null,
+  });
+
+  const resetOfferForm = () => {
+    setOfferForm({
+      id: null,
+      item: '',
+      manager: '',
+      contact: '',
+      price: '',
+      detail: '',
+      image: null,
+    });
+    setOfferFormOpen(false);
+  };
+
+  const openOfferForm = (offer = null) => {
+    if (offer) {
+      setOfferForm({
+        id: offer.id,
+        item: offer.item || '',
+        manager: offer.manager || '',
+        contact: offer.contact || '',
+        price: offer.price || '',
+        detail: offer.detail || '',
+        image: offer.image || null,
+      });
+    } else {
+      resetOfferForm();
+    }
+    setOfferFormOpen(true);
+  };
+
+  const saveOfferForm = async () => {
+    if (!offerForm.item.trim()) {
+      window.alert('품목을 입력하세요.');
+      return;
+    }
+    if (!offerForm.manager.trim()) {
+      window.alert('담당자 이름을 입력하세요.');
+      return;
+    }
+    if (!offerForm.contact.trim()) {
+      window.alert('연락처를 입력하세요.');
+      return;
+    }
+
+    try {
+      const data = {
+        item: offerForm.item.trim(),
+        manager: offerForm.manager.trim(),
+        contact: offerForm.contact.trim(),
+        price: parseInt(offerForm.price) || 0,
+        detail: offerForm.detail.trim(),
+        image: offerForm.image,
+      };
+
+      if (offerForm.id) {
+        await supplyService.updateOffer(offerForm.id, data);
+        window.alert('보급품이 수정되었습니다.');
+      } else {
+        await supplyService.addOffer(currentUserId, data);
+        window.alert('보급품이 등록되었습니다.');
+      }
+      resetOfferForm();
+    } catch (e) {
+      window.alert('저장 실패: ' + e.message);
+    }
+  };
+
+  const deleteOfferHandler = async (id) => {
+    if (!window.confirm('이 보급품을 삭제하시겠습니까?')) return;
+    try {
+      await supplyService.deleteOffer(id);
+      window.alert('삭제되었습니다.');
+    } catch (e) {
+      window.alert('삭제 실패: ' + e.message);
+    }
+  };
+
+  // ★ QR 코드 생성 (포인트 전송/결제용)
+  const [qrSrc, setQrSrc] = useState('');
+  
+  // ★ 명함 데이터 및 QR 생성
+  const [cardData, setCardData] = useState({ 
+    name: '', 
+    title: '', 
+    phone: '', 
+    email: '', 
+    company: '', 
+    address: '', 
+    website: '' 
+  });
+  
+  // 명함 QR 생성 함수
+  const generateCardQr = () => {
+    try {
+      const name = (cardData.name || userData?.name || '').trim();
+      const title = (cardData.title || '').trim();
+      const phone = (cardData.phone || userData?.phone || '').trim();
+      const email = (cardData.email || userData?.email || '').trim();
+      const company = (cardData.company || '').trim();
+      const address = (cardData.address || '').trim();
+      const website = (cardData.website || '').trim();
+
+      const params = new URLSearchParams();
+      if (name) params.set('name', name);
+      if (title) params.set('title', title);
+      if (phone) params.set('phone', phone);
+      if (email) params.set('email', email);
+      if (company) params.set('company', company);
+      if (address) params.set('address', address);
+      if (website) params.set('website', website);
+
+      const cardUrl = (typeof window !== 'undefined' ? window.location.origin : '') + '/card?' + params.toString();
+      const src = 'https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=' + encodeURIComponent(cardUrl);
+      setQrSrc(src);
+    } catch (e) {
+      setQrSrc('');
+    }
+  };
+  
+  // ★ BarcodeDetector QR 스캐너 상태
+  const [scannerOpen, setScannerOpen] = useState(false);
+  const [pendingPayAmount, setPendingPayAmount] = useState(0);
+  const [scannerError, setScannerError] = useState(null);
+  const videoRef = useRef(null);
+  const scanIntervalRef = useRef(null);
+  
+  // QR 스캐너 초기화 및 스캔
+  useEffect(() => {
+    let stream = null;
+    let detector = null;
+    if (!scannerOpen) return;
+    let mounted = true;
+    
+    (async () => {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+        if (!mounted) return;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+          try { await videoRef.current.play(); } catch (e) {}
+        }
+
+        if ('BarcodeDetector' in window) {
+          try {
+            detector = new window.BarcodeDetector({ formats: ['qr_code'] });
+            scanIntervalRef.current = setInterval(async () => {
+              try {
+                const results = await detector.detect(videoRef.current);
+                if (results && results.length) {
+                  const val = results[0].rawValue || results[0].rawData || null;
+                  if (val) {
+                    clearInterval(scanIntervalRef.current);
+                    try { stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+                    setScannerOpen(false);
+                    
+                    // 상점 QR 결제 처리
+                    const m = String(val).match(/storeId=([^&]+)/i);
+                    const storeId = m ? decodeURIComponent(m[1]) : null;
+                    if (storeId) {
+                      await handlePayment(storeId, pendingPayAmount);
+                    } else {
+                      alert('유효하지 않은 QR입니다.');
+                    }
+                  }
+                }
+              } catch (e) {}
+            }, 500);
+          } catch (e) {
+            setScannerError('BarcodeDetector 초기화 실패');
+          }
+        } else {
+          setScannerError('이 브라우저는 BarcodeDetector를 지원하지 않습니다.');
+        }
+      } catch (e) {
+        setScannerError('카메라 접근에 실패했습니다. 권한을 허용했는지 확인하세요.');
+      }
+    })();
+
+    return () => {
+      mounted = false;
+      try { if (scanIntervalRef.current) clearInterval(scanIntervalRef.current); } catch (e) {}
+      try { if (stream) stream.getTracks().forEach(t => t.stop()); } catch (e) {}
+    };
+  }, [scannerOpen, pendingPayAmount]);
+  
+  // ★ 포인트 결제 처리 함수
+  const handlePayment = async (storeId, amount) => {
+    try {
+      if (!isPointsTransferEnabled()) {
+        alert('현재 포인트 전송이 중지되어 결제가 불가합니다.');
+        return;
+      }
+      
+      const res = await fetch('/api/points/pay', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${currentUserId}`
+        },
+        body: JSON.stringify({ storeId, amount })
+      });
+      
+      if (res.ok) {
+        alert('결제처리가 완료되었습니다.');
+        // 포인트 다시 로드
+        const balanceRes = await getPointBalance(currentUserId);
+        const historyRes = await getPointHistory(currentUserId, { limit: 50 });
+        setPointData({ 
+          balance: balanceRes.balance || 0, 
+          history: historyRes.history || [] 
+        });
+      } else {
+        const body = await res.json().catch(() => ({}));
+        alert(body.error || '결제에 실패했습니다.');
+      }
+    } catch (e) {
+      console.error('[My] Payment failed:', e);
+      alert('결제 처리 중 오류가 발생했습니다.');
+    }
+  };
+  
+  const generateQr = async () => {
+    try {
+      const payload = `su://pay?userId=${currentUserId}`;
+      const dataUrl = await QRCode.toDataURL(payload, { margin: 4, width: 260 });
+      setQrSrc(dataUrl);
+    } catch (e) {
+      console.error('[My] QR 생성 실패:', e);
+      setQrSrc('');
+    }
+  };
+
+  // 탭 상태
+  const [pointTab, setPointTab] = useState("all"); // all | earn | spend
+
+  const balance = useMemo(() => pointData.balance, [pointData.balance]);
+
+  const filteredHistory = useMemo(() => {
+    if (pointTab === "all") return pointData.history;
+    return pointData.history.filter((h) => {
+      if (pointTab === "earn") {
+        return h.amount > 0;
+      } else {
+        return h.amount < 0;
+      }
+    });
+  }, [pointData.history, pointTab]);
+
+  // ────────── 인라인 스타일 ──────────
+  const panelStyle = {
+    marginTop: 12,
+    padding: 16,
+    borderRadius: 16,
+    border: "1px solid rgba(255,255,255,0.08)",
+    background: "linear-gradient(135deg, rgba(255,255,255,0.06), rgba(255,255,255,0.02))",
+  };
+
+  const cardStyle = {
+    padding: 14,
+    borderRadius: 14,
+    border: "1px solid rgba(255,255,255,0.10)",
+    background: "rgba(0,0,0,0.15)",
+  };
+
+  const sectionTitleStyle = {
+    fontWeight: 900,
+    fontSize: 16,
+    marginBottom: 12,
+    display: "flex",
+    alignItems: "center",
+    gap: 8,
+  };
+
+  const chipStyle = (active) => ({
+    padding: "6px 12px",
+    borderRadius: 999,
+    border: "1px solid rgba(255,255,255,0.12)",
+    background: active ? "rgba(255,255,255,0.15)" : "transparent",
+    fontWeight: active ? 800 : 500,
+    fontSize: 13,
+    cursor: "pointer",
+  });
+
+  const tagStyle = {
+    padding: "4px 10px",
+    borderRadius: 8,
+    background: "rgba(255,255,255,0.08)",
+    fontSize: 12,
+  };
+
+  return (
+    <div className="su-page" style={{ paddingBottom: 100 }}>
+      {/* ────────── 헤더 ────────── */}
+      <header className="su-top" style={{ display: "flex", alignItems: "center", gap: 10 }}>
+        <button className="su-iconBtn" type="button" onClick={() => navigate(-1)} aria-label="뒤로">
+          ←
+        </button>
+        <div className="su-topTitle" style={{ flex: 1, fontWeight: 900 }}>
+          🏢 마이오피스
+        </div>
+        <button className="su-pill" type="button" onClick={() => navigate("/home")}>
+          홈
+        </button>
+      </header>
+
+      {/* ────────── ① 프로필 요약 ────────── */}
+      <section style={panelStyle}>
+        <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+          <div style={{
+            width: 64,
+            height: 64,
+            borderRadius: "50%",
+            background: "linear-gradient(135deg, #6366f1, #8b5cf6)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            fontSize: 28,
+          }}>
+            {userData.profileImage ? (
+              <img src={userData.profileImage} alt="프로필" style={{ width: "100%", height: "100%", borderRadius: "50%", objectFit: "cover" }} />
+            ) : (
+              "👤"
+            )}
+          </div>
+          <div style={{ flex: 1 }}>
+            <div style={{ fontWeight: 900, fontSize: 20 }}>{userData.name}</div>
+            {userData.nickname && userData.nickname !== userData.name && (
+              <div style={{ fontSize: 13, opacity: 0.8, marginTop: 2 }}>({userData.nickname})</div>
+            )}
+            <div style={{ fontSize: 13, opacity: 0.7, marginTop: 4 }}>
+              가입일: {userData.joinDate}
+            </div>
+          </div>
+        </div>
+
+        {/* 회원 상세 정보 */}
+        <div style={{ 
+          marginTop: 14, 
+          display: "grid", 
+          gap: 8, 
+          fontSize: 13, 
+          opacity: 0.8 
+        }}>
+          {userData.phone && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span>📞</span>
+              <span>{userData.phone.replace(/(\d{3})(\d{4})(\d{4})/, "$1-$2-$3")}</span>
+            </div>
+          )}
+          {userData.region && (
+            <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+              <span>📍</span>
+              <span>{userData.region}</span>
+            </div>
+          )}
+        </div>
+
+        {/* 포인트 잔액 강조 */}
+        <div style={{
+          marginTop: 16,
+          padding: 16,
+          borderRadius: 14,
+          background: "linear-gradient(135deg, rgba(99,102,241,0.2), rgba(139,92,246,0.1))",
+          textAlign: "center",
+        }}>
+          <div style={{ fontSize: 13, opacity: 0.8 }}>현재 포인트</div>
+          <div style={{ fontSize: 32, fontWeight: 900, color: "#6ee7b7", marginTop: 4 }}>
+            {formatNumber(balance)} P
+          </div>
+        </div>
+        
+        {/* 상점 QR 코드 생성 */}
+        <div style={{ marginTop: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>🏪 내 상점 QR</div>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={async () => {
+                try {
+                  const payload = `su://pay?storeId=${currentUserId}`;
+                  const dataUrl = await QRCode.toDataURL(payload, { margin: 4, width: 260 });
+                  const w = window.open('', '_blank', 'width=320,height=380');
+                  if (w) {
+                    w.document.title = '상점 QR';
+                    const html = `<!doctype html><title>상점 QR</title><style>body{background:#fff;margin:0;display:flex;align-items:center;justify-content:center;height:100vh}img{max-width:90%;height:auto}</style><img src="${dataUrl}" alt="qr"/>`;
+                    w.document.write(html);
+                    w.document.close();
+                  } else {
+                    alert('새 창을 열 수 없습니다. 브라우저 팝업을 허용해 주세요.');
+                  }
+                } catch (e) {
+                  console.error(e);
+                  alert('QR 생성에 실패했습니다.');
+                }
+              }}
+              style={{
+                flex: 1,
+                padding: '8px 12px',
+                borderRadius: 8,
+                background: 'rgba(255,255,255,0.04)',
+                border: '1px solid rgba(255,255,255,0.06)',
+                color: '#fff',
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              QR 보기
+            </button>
+            <button
+              onClick={async () => {
+                try {
+                  const payload = `su://pay?storeId=${currentUserId}`;
+                  const dataUrl = await QRCode.toDataURL(payload, { margin: 4, width: 300 });
+                  const img = new Image();
+                  img.crossOrigin = 'anonymous';
+                  img.onload = () => {
+                    try {
+                      const pad = 16;
+                      const c = document.createElement('canvas');
+                      c.width = img.width + pad * 2;
+                      c.height = img.height + pad * 2;
+                      const ctx = c.getContext('2d');
+                      ctx.fillStyle = '#fff';
+                      ctx.fillRect(0, 0, c.width, c.height);
+                      ctx.drawImage(img, pad, pad);
+                      c.toBlob((b) => {
+                        if (!b) {
+                          alert('다운로드 실패');
+                          return;
+                        }
+                        const a = document.createElement('a');
+                        a.href = URL.createObjectURL(b);
+                        a.download = `store_${currentUserId}_qr.png`;
+                        a.click();
+                        setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+                      }, 'image/png');
+                    } catch (err) {
+                      console.error(err);
+                      alert('QR 저장에 실패했습니다.');
+                    }
+                  };
+                  img.onerror = () => {
+                    alert('QR 이미지 로드 실패');
+                  };
+                  img.src = dataUrl;
+                } catch (e) {
+                  console.error(e);
+                  alert('QR 생성에 실패했습니다.');
+                }
+              }}
+              style={{
+                flex: 1,
+                padding: '8px 12px',
+                borderRadius: 8,
+                background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                border: 'none',
+                color: '#fff',
+                fontSize: 13,
+                fontWeight: 700,
+                cursor: 'pointer',
+              }}
+            >
+              PNG 저장
+            </button>
+          </div>
+          <div style={{ fontSize: 11, opacity: 0.6, marginTop: 4 }}>
+            고객이 이 QR을 스캔하여 포인트로 결제할 수 있습니다
+          </div>
+        </div>
+      </section>
+
+      {/* ────────── ② 포인트 관리 ────────── */}
+      <section style={panelStyle}>
+        <div style={sectionTitleStyle}>
+          💰 포인트 관리
+        </div>
+
+        {/* 지급/사용 요약 */}
+        <div style={{ display: "flex", gap: 10, marginBottom: 12 }}>
+          <div style={{ ...cardStyle, flex: 1, textAlign: "center" }}>
+            <div style={{ fontSize: 12, opacity: 0.7 }}>총 적립</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#6ee7b7", marginTop: 4 }}>
+              +{formatNumber(pointData.history.filter(h => h.amount > 0 && h.status !== 'cancelled').reduce((sum, h) => sum + h.amount, 0))} P
+            </div>
+          </div>
+          <div style={{ ...cardStyle, flex: 1, textAlign: "center" }}>
+            <div style={{ fontSize: 12, opacity: 0.7 }}>총 사용</div>
+            <div style={{ fontSize: 18, fontWeight: 800, color: "#f87171", marginTop: 4 }}>
+              {formatNumber(pointData.history.filter(h => h.amount < 0 && h.status !== 'cancelled').reduce((sum, h) => sum + h.amount, 0))} P
+            </div>
+          </div>
+        </div>
+
+        {/* QR 코드 생성 */}
+        <div style={{ ...cardStyle, marginBottom: 12 }}>
+          <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8 }}>💳 포인트 결제 QR</div>
+          {!qrSrc ? (
+            <button 
+              type="button" 
+              onClick={generateQr}
+              style={{ 
+                width: '100%', 
+                padding: '10px', 
+                borderRadius: 8, 
+                background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', 
+                color: '#fff', 
+                fontWeight: 700,
+                border: 'none',
+                cursor: 'pointer'
+              }}
+            >
+              QR 코드 생성
+            </button>
+          ) : (
+            <div style={{ textAlign: 'center' }}>
+              <img src={qrSrc} alt="QR Code" style={{ maxWidth: '100%', borderRadius: 8 }} />
+              <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                <button 
+                  type="button" 
+                  onClick={() => setQrSrc('')}
+                  style={{ 
+                    flex: 1,
+                    padding: '8px', 
+                    borderRadius: 8, 
+                    background: 'rgba(255,255,255,0.04)', 
+                    border: '1px solid rgba(255,255,255,0.06)',
+                    color: '#fff',
+                    cursor: 'pointer'
+                  }}
+                >
+                  닫기
+                </button>
+                <button 
+                  type="button" 
+                  onClick={() => {
+                    const a = document.createElement('a');
+                    a.href = qrSrc;
+                    a.download = `포인트QR_${currentUserId}.png`;
+                    a.click();
+                  }}
+                  style={{ 
+                    flex: 1,
+                    padding: '8px', 
+                    borderRadius: 8, 
+                    background: 'linear-gradient(135deg,#6366f1,#8b5cf6)', 
+                    color: '#fff', 
+                    fontWeight: 700,
+                    border: 'none',
+                    cursor: 'pointer'
+                  }}
+                >
+                  PNG 저장
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* 탭 */}
+        <div style={{ display: "flex", gap: 8, marginBottom: 12 }}>
+          <button type="button" style={chipStyle(pointTab === "all")} onClick={() => setPointTab("all")}>전체</button>
+          <button type="button" style={chipStyle(pointTab === "earn")} onClick={() => setPointTab("earn")}>적립</button>
+          <button type="button" style={chipStyle(pointTab === "spend")} onClick={() => setPointTab("spend")}>사용</button>
+        </div>
+
+        {/* 내역 리스트 */}
+        <div style={{ display: "grid", gap: 8, maxHeight: 200, overflowY: "auto" }}>
+          {filteredHistory.map((h) => {
+            const typeLabel = POINT_TYPE_LABELS[h.type]?.label || h.type;
+            const displayDate = h.createdAt ? new Date(h.createdAt).toLocaleDateString() : "-";
+            return (
+              <div key={h.id} style={{ ...cardStyle, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <div>
+                  <div style={{ fontSize: 14, fontWeight: 600 }}>{h.reason || typeLabel}</div>
+                  <div style={{ fontSize: 12, opacity: 0.6, marginTop: 2 }}>{displayDate}</div>
+                </div>
+                <div style={{ fontWeight: 800, color: h.amount > 0 ? "#6ee7b7" : "#f87171" }}>
+                  {h.amount > 0 ? "+" : ""}{formatNumber(h.amount)} P
+                </div>
+              </div>
+            );
+          })}
+          {filteredHistory.length === 0 && (
+            <div style={{ ...cardStyle, textAlign: "center", opacity: 0.7 }}>내역이 없습니다</div>
+          )}
+        </div>
+      </section>
+
+      {/* ────────── ③ 일정 / 캘린더 ────────── */}
+      <section style={panelStyle}>
+        <div style={sectionTitleStyle}>
+          📅 일정
+        </div>
+
+        {/* 오늘 일정 강조 */}
+        <div style={{ ...cardStyle, background: "linear-gradient(135deg, rgba(251,191,36,0.15), rgba(251,191,36,0.05))", marginBottom: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>📌 오늘 일정</div>
+          {scheduleData.today.length > 0 ? (
+            scheduleData.today.map((s) => (
+              <div key={s.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                <span>{s.title}</span>
+                <span style={{ opacity: 0.7 }}>{s.time}</span>
+              </div>
+            ))
+          ) : (
+            <div style={{ opacity: 0.7 }}>오늘 일정이 없습니다</div>
+          )}
+        </div>
+
+        {/* 예정 일정 */}
+        <div style={cardStyle}>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>🗓️ 예정 일정</div>
+          {scheduleData.upcoming.length > 0 ? (
+            scheduleData.upcoming.map((s) => (
+              <div key={s.id} style={{ display: "flex", justifyContent: "space-between", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                <span>{s.title}</span>
+                <span style={{ opacity: 0.7 }}>{s.date}</span>
+              </div>
+            ))
+          ) : (
+            <div style={{ opacity: 0.7 }}>예정된 일정이 없습니다</div>
+          )}
+        </div>
+      </section>
+
+      {/* ────────── ④ 보급지원 / 구매내역 ────────── */}
+      <section style={panelStyle}>
+        <div style={sectionTitleStyle}>
+          📦 보급지원 / 구매내역
+        </div>
+
+        {/* 보급지원 신청 내역 */}
+        <div style={{ ...cardStyle, marginBottom: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>🎁 보급지원 신청</div>
+          {supplyData.requests.length > 0 ? (
+            supplyData.requests.map((r) => (
+              <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                <span>{r.item}</span>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={tagStyle}>{r.status}</span>
+                  <span style={{ fontSize: 12, opacity: 0.6 }}>{r.date}</span>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div style={{ opacity: 0.7 }}>신청 내역이 없습니다</div>
+          )}
+        </div>
+
+        {/* 구매 내역 */}
+        <div style={cardStyle}>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>🛒 구매 내역</div>
+          {supplyData.purchases.length > 0 ? (
+            supplyData.purchases.map((p) => (
+              <div key={p.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "6px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                <span>{p.item}</span>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  <span style={{ fontWeight: 700 }}>{formatNumber(p.amount)}원</span>
+                  <span style={tagStyle}>{p.status}</span>
+                </div>
+              </div>
+            ))
+          ) : (
+            <div style={{ opacity: 0.7 }}>구매 내역이 없습니다</div>
+          )}
+        </div>
+      </section>
+
+      {/* ────────── ⑤ 친구 / 커뮤니케이션 ────────── */}
+      <section style={panelStyle}>
+        <div style={sectionTitleStyle}>
+          👥 친구
+          <span style={{ fontSize: 12, opacity: 0.6, fontWeight: 400 }}>({friendData.count}명)</span>
+        </div>
+
+        {/* 카카오톡 친구 추가 */}
+        <button
+          type="button"
+          onClick={() => window.open("https://pf.kakao.com/_example", "_blank")}
+          style={{
+            width: "100%",
+            padding: "12px",
+            borderRadius: 12,
+            border: "none",
+            background: "#FEE500",
+            color: "#000",
+            fontWeight: 800,
+            fontSize: 14,
+            cursor: "pointer",
+            marginBottom: 12,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+          }}
+        >
+          💬 카카오톡 친구 추가
+        </button>
+
+        {/* 친구 목록 */}
+        <div style={cardStyle}>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>친구 목록</div>
+          {friendData.list.length > 0 ? (
+            friendData.list.map((f) => (
+              <div key={f.id} style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                <span style={{ fontWeight: 600 }}>{f.name}</span>
+                <span style={{ fontSize: 12, opacity: 0.6 }}>가입: {f.joinDate}</span>
+              </div>
+            ))
+          ) : (
+            <div style={{ opacity: 0.7 }}>친구가 없습니다</div>
+          )}
+        </div>
+      </section>
+
+      {/* ────────── 스마트비서(라라) 설정 ────────── */}
+      <section style={panelStyle}>
+        <div style={sectionTitleStyle}>
+          🤖 스마트비서 라라 설정
+        </div>
+
+        {/* 관심 지역 */}
+        <div style={{ ...cardStyle, marginBottom: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>📍 관심 지역</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {assistantData.interestRegions.length > 0 ? (
+              assistantData.interestRegions.map((region, idx) => (
+                <span key={idx} style={tagStyle}>{region}</span>
+              ))
+            ) : (
+              <span style={{ opacity: 0.7 }}>미등록</span>
+            )}
+          </div>
+        </div>
+
+        {/* 관심 카테고리 */}
+        <div style={{ ...cardStyle, marginBottom: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>🏷️ 관심 카테고리</div>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+            {assistantData.interestCategories.length > 0 ? (
+              assistantData.interestCategories.map((cat, idx) => (
+                <span key={idx} style={tagStyle}>{cat}</span>
+              ))
+            ) : (
+              <span style={{ opacity: 0.7 }}>미등록</span>
+            )}
+          </div>
+        </div>
+
+        {/* 알림 수신 설정 */}
+        <div style={{ ...cardStyle, marginBottom: 10 }}>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>🔔 알림 수신 설정</div>
+          <div style={{ display: "grid", gap: 8 }}>
+            {[
+              { key: "mission", label: "밋션 알림", value: assistantData.notifications.mission },
+              { key: "event", label: "이벤트 알림", value: assistantData.notifications.event },
+              { key: "point", label: "포인트 알림", value: assistantData.notifications.point },
+            ].map((n) => (
+              <div key={n.key} style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span>{n.label}</span>
+                <span style={{
+                  padding: "4px 10px",
+                  borderRadius: 999,
+                  background: n.value ? "rgba(110,231,183,0.2)" : "rgba(255,255,255,0.08)",
+                  color: n.value ? "#6ee7b7" : "rgba(255,255,255,0.5)",
+                  fontSize: 12,
+                  fontWeight: 700,
+                }}>
+                  {n.value ? "ON" : "OFF"}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* 최근 활동 요약 */}
+        <div style={cardStyle}>
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 10 }}>📊 최근 활동 요약</div>
+          
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>최근 참여 밋션</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {assistantData.recentActivity.missions.map((m, idx) => (
+                <span key={idx} style={tagStyle}>{m}</span>
+              ))}
+            </div>
+          </div>
+
+          <div style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>최근 방문 상점</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {assistantData.recentActivity.shops.map((s, idx) => (
+                <span key={idx} style={tagStyle}>{s}</span>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <div style={{ fontSize: 12, opacity: 0.7, marginBottom: 4 }}>라라 추천 히스토리</div>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
+              {assistantData.recentActivity.recommendations.map((r, idx) => (
+                <span key={idx} style={{ ...tagStyle, background: "rgba(99,102,241,0.15)", color: "#a5b4fc" }}>{r}</span>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ★ 보급지원 담당자 전용 섹션 */}
+      {isSupplyManager && (
+        <section style={{ ...panelStyle, marginTop: 20, background: "linear-gradient(135deg, rgba(34,197,94,0.15), rgba(34,197,94,0.08))", border: "1px solid rgba(34,197,94,0.3)" }}>
+          <div style={sectionTitleStyle}>
+            <span style={{ fontSize: 20 }}>📦</span> 보급지원 담당자
+          </div>
+          
+          {/* 보급품 등록 버튼 */}
+          <button
+            onClick={() => openOfferForm(null)}
+            style={{
+              width: "100%",
+              padding: "12px 20px",
+              borderRadius: 12,
+              border: "none",
+              background: "linear-gradient(135deg, #22c55e 0%, #16a34a 100%)",
+              color: "#fff",
+              fontWeight: 700,
+              fontSize: 14,
+              cursor: "pointer",
+              marginBottom: 16,
+            }}
+          >
+            ➕ 보급품 등록하기
+          </button>
+
+          {/* 등록된 보급품 */}
+          <div style={{ marginBottom: 16 }}>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>등록된 보급품 ({offers.length})</div>
+            {offers.length === 0 ? (
+              <div style={{ ...cardStyle, textAlign: "center", opacity: 0.6 }}>등록된 보급품이 없습니다.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 8 }}>
+                {offers.map(o => (
+                  <div key={o.id} style={cardStyle}>
+                    <div style={{ fontWeight: 700 }}>{o.item}</div>
+                    <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+                      {o.manager} • {o.contact} • {(o.price || 0).toLocaleString()}원
+                    </div>
+                    <div style={{ fontSize: 12, opacity: 0.6, marginTop: 4 }}>{o.detail || '-'}</div>
+                    <div style={{ display: 'flex', gap: 8, marginTop: 8 }}>
+                      <button
+                        onClick={() => openOfferForm(o)}
+                        style={{
+                          flex: 1,
+                          padding: '6px 12px',
+                          borderRadius: 6,
+                          border: 'none',
+                          background: '#3b82f6',
+                          color: '#fff',
+                          cursor: 'pointer',
+                          fontSize: 12,
+                        }}
+                      >
+                        수정
+                      </button>
+                      <button
+                        onClick={() => deleteOfferHandler(o.id)}
+                        style={{
+                          flex: 1,
+                          padding: '6px 12px',
+                          borderRadius: 6,
+                          border: 'none',
+                          background: '#ef4444',
+                          color: '#fff',
+                          cursor: 'pointer',
+                          fontSize: 12,
+                        }}
+                      >
+                        삭제
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* 신청 목록 */}
+          <div>
+            <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 8 }}>신청 현황 ({mySupplyRequests.length})</div>
+            {mySupplyRequests.length === 0 ? (
+              <div style={{ ...cardStyle, textAlign: "center", opacity: 0.6 }}>신청 내역이 없습니다.</div>
+            ) : (
+              <div style={{ display: "grid", gap: 8 }}>
+                {mySupplyRequests.map(r => (
+                  <div key={r.id} style={cardStyle}>
+                    <div style={{ fontWeight: 700 }}>{r.item}</div>
+                    <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>
+                      신청자: {r.applicantName || '미확인'} • {r.applicantContact || '-'}
+                    </div>
+                    <div style={{ fontSize: 12, opacity: 0.6, marginTop: 4 }}>
+                      상태: {r.status} • {r.date}
+                    </div>
+                    {r.status === '신청' && (
+                      <button
+                        onClick={async () => {
+                          try {
+                            await supplyService.confirmRequest(r.id, currentUserId);
+                            window.alert('신청을 확인했습니다.');
+                          } catch (e) {
+                            window.alert('확인 처리 실패');
+                          }
+                        }}
+                        style={{
+                          marginTop: 8,
+                          padding: '6px 12px',
+                          borderRadius: 6,
+                          border: 'none',
+                          background: '#22c55e',
+                          color: '#fff',
+                          cursor: 'pointer',
+                          fontSize: 12,
+                        }}
+                      >
+                        확인 완료
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          <button
+            onClick={() => navigate("/support")}
+            style={{
+              width: "100%",
+              padding: "12px 20px",
+              borderRadius: 12,
+              border: "none",
+              background: "linear-gradient(135deg, #22c55e 0%, #16a34a 100%)",
+              color: "#fff",
+              fontWeight: 700,
+              fontSize: 14,
+              cursor: "pointer",
+              marginTop: 12,
+            }}
+          >
+            📦 보급지원 페이지로 이동
+          </button>
+        </section>
+      )}
+
+      {/* ★ 명함 QR 코드 섹션 */}
+      <section style={panelStyle}>
+        <div style={sectionTitleStyle}>💳 내 명함 QR</div>
+        <div style={{ fontSize: 13, opacity: 0.8, marginBottom: 12 }}>
+          명함 정보를 입력하고 QR 코드를 생성하세요. QR을 스캔하면 공개 명함 페이지로 이동합니다.
+        </div>
+        <div style={{ display: 'grid', gap: 8, marginBottom: 12 }}>
+          <input
+            type="text"
+            placeholder="이름"
+            value={cardData.name || userData?.name || ''}
+            onChange={(e) => setCardData({ ...cardData, name: e.target.value })}
+            style={{
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.1)',
+              background: 'rgba(255,255,255,0.05)',
+              color: '#fff',
+              fontSize: 14,
+            }}
+          />
+          <input
+            type="text"
+            placeholder="직함"
+            value={cardData.title}
+            onChange={(e) => setCardData({ ...cardData, title: e.target.value })}
+            style={{
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.1)',
+              background: 'rgba(255,255,255,0.05)',
+              color: '#fff',
+              fontSize: 14,
+            }}
+          />
+          <input
+            type="text"
+            placeholder="회사"
+            value={cardData.company}
+            onChange={(e) => setCardData({ ...cardData, company: e.target.value })}
+            style={{
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.1)',
+              background: 'rgba(255,255,255,0.05)',
+              color: '#fff',
+              fontSize: 14,
+            }}
+          />
+          <input
+            type="tel"
+            placeholder="전화번호"
+            value={cardData.phone || userData?.phone || ''}
+            onChange={(e) => setCardData({ ...cardData, phone: e.target.value })}
+            style={{
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.1)',
+              background: 'rgba(255,255,255,0.05)',
+              color: '#fff',
+              fontSize: 14,
+            }}
+          />
+          <input
+            type="email"
+            placeholder="이메일"
+            value={cardData.email}
+            onChange={(e) => setCardData({ ...cardData, email: e.target.value })}
+            style={{
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.1)',
+              background: 'rgba(255,255,255,0.05)',
+              color: '#fff',
+              fontSize: 14,
+            }}
+          />
+          <input
+            type="text"
+            placeholder="주소"
+            value={cardData.address}
+            onChange={(e) => setCardData({ ...cardData, address: e.target.value })}
+            style={{
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.1)',
+              background: 'rgba(255,255,255,0.05)',
+              color: '#fff',
+              fontSize: 14,
+            }}
+          />
+          <input
+            type="url"
+            placeholder="웹사이트"
+            value={cardData.website}
+            onChange={(e) => setCardData({ ...cardData, website: e.target.value })}
+            style={{
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.1)',
+              background: 'rgba(255,255,255,0.05)',
+              color: '#fff',
+              fontSize: 14,
+            }}
+          />
+        </div>
+        <button
+          onClick={generateCardQr}
+          style={{
+            width: '100%',
+            padding: '12px',
+            borderRadius: 10,
+            border: 'none',
+            background: 'linear-gradient(135deg, #6ee7b7 0%, #10b981 100%)',
+            color: '#000',
+            fontWeight: 800,
+            fontSize: 14,
+            cursor: 'pointer',
+            marginBottom: 12,
+          }}
+        >
+          명함 QR 생성
+        </button>
+        {qrSrc && (
+          <div style={{ textAlign: 'center', marginTop: 12 }}>
+            <div style={{ background: '#fff', padding: 12, borderRadius: 12, display: 'inline-block' }}>
+              <img src={qrSrc} alt="명함 QR" style={{ width: 200, height: 200, display: 'block' }} />
+            </div>
+            <div style={{ marginTop: 8, fontSize: 12, opacity: 0.7 }}>
+              QR을 스캔하면 공개 명함 페이지로 이동합니다
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* ★ 상점 QR 결제 섹션 */}
+      <section style={panelStyle}>
+        <div style={sectionTitleStyle}>💰 QR 결제</div>
+        <div style={{ fontSize: 13, opacity: 0.8, marginBottom: 12 }}>
+          상점 QR 코드를 스캔하여 포인트로 결제하세요.
+        </div>
+        <div style={{ marginBottom: 12 }}>
+          <input
+            type="number"
+            placeholder="결제 금액"
+            value={pendingPayAmount || ''}
+            onChange={(e) => setPendingPayAmount(Number(e.target.value) || 0)}
+            style={{
+              width: '100%',
+              padding: '10px 12px',
+              borderRadius: 8,
+              border: '1px solid rgba(255,255,255,0.1)',
+              background: 'rgba(255,255,255,0.05)',
+              color: '#fff',
+              fontSize: 14,
+            }}
+          />
+        </div>
+        <button
+          onClick={() => setScannerOpen(true)}
+          disabled={!pendingPayAmount || pendingPayAmount <= 0}
+          style={{
+            width: '100%',
+            padding: '12px',
+            borderRadius: 10,
+            border: 'none',
+            background: pendingPayAmount > 0 ? 'linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%)' : '#334155',
+            color: '#fff',
+            fontWeight: 800,
+            fontSize: 14,
+            cursor: pendingPayAmount > 0 ? 'pointer' : 'not-allowed',
+            opacity: pendingPayAmount > 0 ? 1 : 0.5,
+          }}
+        >
+          상점 QR 스캔하기
+        </button>
+        {scannerError && (
+          <div style={{ marginTop: 8, color: '#f87171', fontSize: 13 }}>
+            {scannerError}
+          </div>
+        )}
+      </section>
+
+      {/* ★ QR 스캐너 모달 */}
+      {scannerOpen && (
+        <div style={{
+          position: 'fixed',
+          inset: 0,
+          background: 'rgba(0,0,0,0.9)',
+          zIndex: 2000,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          padding: 20,
+        }}>
+          <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 16, color: '#fff' }}>
+            상점 QR 코드를 스캔하세요
+          </div>
+          <video
+            ref={videoRef}
+            autoPlay
+            playsInline
+            muted
+            style={{
+              width: '100%',
+              maxWidth: 400,
+              height: 300,
+              borderRadius: 12,
+              objectFit: 'cover',
+              marginBottom: 16,
+            }}
+          />
+          <button
+            onClick={() => {
+              setScannerOpen(false);
+              setScannerError(null);
+              if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
+            }}
+            style={{
+              padding: '12px 24px',
+              borderRadius: 10,
+              border: 'none',
+              background: '#ef4444',
+              color: '#fff',
+              fontWeight: 800,
+              fontSize: 14,
+              cursor: 'pointer',
+            }}
+          >
+            취소
+          </button>
+          {!('BarcodeDetector' in window) && (
+            <div style={{ marginTop: 16, color: '#fbbf24', fontSize: 13, textAlign: 'center' }}>
+              이 브라우저는 QR 자동 스캔을 지원하지 않습니다.<br/>
+              Chrome 또는 Edge 최신 버전을 사용하세요.
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ★ 관리자 전용 섹션 */}
+      {isAdmin && (
+        <section style={{ ...panelStyle, marginTop: 20, background: "linear-gradient(135deg, rgba(139,92,246,0.15), rgba(99,102,241,0.08))", border: "1px solid rgba(139,92,246,0.3)" }}>
+          <div style={sectionTitleStyle}>
+            <span style={{ fontSize: 20 }}>⚙️</span> 관리자 메뉴
+          </div>
+          <button
+            onClick={() => navigate("/admin")}
+            style={{
+              width: "100%",
+              padding: "14px 20px",
+              borderRadius: 12,
+              border: "none",
+              background: "linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)",
+              color: "#fff",
+              fontWeight: 700,
+              fontSize: 15,
+              cursor: "pointer",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              gap: 8,
+            }}
+          >
+            <span>🔧</span> 관리자 콘솔
+          </button>
+          <div style={{ marginTop: 10, fontSize: 12, color: "rgba(255,255,255,0.5)", textAlign: "center" }}>
+            지역, 미션, 상점, 회원 등을 관리할 수 있습니다.
+          </div>
+        </section>
+      )}
+
+      <div style={{ height: 20 }} />
+      {/* ★ 보급품 등록/수정 모달 */}
+      {offerFormOpen && (
+        <div
+          onClick={resetOfferForm}
+          style={{
+            position: 'fixed',
+            top: 0,
+            left: 0,
+            right: 0,
+            bottom: 0,
+            background: 'rgba(0,0,0,0.7)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 9999,
+          }}
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            style={{
+              background: '#1a1a1a',
+              borderRadius: 16,
+              padding: 20,
+              width: '90%',
+              maxWidth: 400,
+              maxHeight: '80vh',
+              overflowY: 'auto',
+            }}
+          >
+            <div style={{ fontSize: 18, fontWeight: 900, marginBottom: 16 }}>
+              {offerForm.id ? '보급품 수정' : '보급품 등록'}
+            </div>
+
+            <div style={{ display: 'grid', gap: 12 }}>
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>품목명 *</div>
+                <input
+                  type="text"
+                  value={offerForm.item}
+                  onChange={(e) => setOfferForm({ ...offerForm, item: e.target.value })}
+                  placeholder="예: 라면 1박스"
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    background: 'rgba(255,255,255,0.05)',
+                    color: '#fff',
+                    fontSize: 14,
+                  }}
+                />
+              </div>
+
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>담당자 *</div>
+                <input
+                  type="text"
+                  value={offerForm.manager}
+                  onChange={(e) => setOfferForm({ ...offerForm, manager: e.target.value })}
+                  placeholder="담당자 이름"
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    background: 'rgba(255,255,255,0.05)',
+                    color: '#fff',
+                    fontSize: 14,
+                  }}
+                />
+              </div>
+
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>연락처 *</div>
+                <input
+                  type="tel"
+                  value={offerForm.contact}
+                  onChange={(e) => setOfferForm({ ...offerForm, contact: e.target.value })}
+                  placeholder="010-0000-0000"
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    background: 'rgba(255,255,255,0.05)',
+                    color: '#fff',
+                    fontSize: 14,
+                  }}
+                />
+              </div>
+
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>가격</div>
+                <input
+                  type="number"
+                  value={offerForm.price}
+                  onChange={(e) => setOfferForm({ ...offerForm, price: e.target.value })}
+                  placeholder="0"
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    background: 'rgba(255,255,255,0.05)',
+                    color: '#fff',
+                    fontSize: 14,
+                  }}
+                />
+              </div>
+
+              <div>
+                <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 4 }}>상세 설명</div>
+                <textarea
+                  value={offerForm.detail}
+                  onChange={(e) => setOfferForm({ ...offerForm, detail: e.target.value })}
+                  placeholder="보급품 상세 설명"
+                  rows={3}
+                  style={{
+                    width: '100%',
+                    padding: '10px 12px',
+                    borderRadius: 8,
+                    border: '1px solid rgba(255,255,255,0.1)',
+                    background: 'rgba(255,255,255,0.05)',
+                    color: '#fff',
+                    fontSize: 14,
+                    resize: 'none',
+                  }}
+                />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+              <button
+                onClick={resetOfferForm}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  borderRadius: 8,
+                  border: '1px solid rgba(255,255,255,0.2)',
+                  background: 'transparent',
+                  color: '#fff',
+                  fontSize: 14,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                취소
+              </button>
+              <button
+                onClick={saveOfferForm}
+                style={{
+                  flex: 1,
+                  padding: '12px',
+                  borderRadius: 8,
+                  border: 'none',
+                  background: 'linear-gradient(135deg, #22c55e 0%, #16a34a 100%)',
+                  color: '#fff',
+                  fontSize: 14,
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                {offerForm.id ? '수정' : '등록'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}    </div>
+  );
+}

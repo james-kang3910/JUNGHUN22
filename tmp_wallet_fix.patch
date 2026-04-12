@@ -1,0 +1,34 @@
+﻿diff --git a/src/App.jsx b/src/App.jsx
+index 2dd37eb..2dd37eb 100644
+--- a/src/App.jsx
++++ b/src/App.jsx
+@@ -4303,7 +4303,7 @@
+       <section className="su-panel" style={{ position: "relative", overflow: "hidden", background: "linear-gradient(180deg, rgba(255,255,255,0.96), rgba(247,250,252,0.98))", border: "1px solid rgba(226,232,240,0.95)", borderRadius: 22, boxShadow: "0 16px 40px rgba(15,23,42,0.08)", color: "#0f172a" }}>
+         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 12 }}>
+           <div className="su-sectionTitle" style={{ color: "#0f172a" }}> 포인트 관리</div>
+-          <div style={{ fontSize: 12, fontWeight: 800, color: "#0f766e", letterSpacing: "0.04em" }}>POINT WALLET</div>
++          <div style={{ fontSize: 12, fontWeight: 800, color: "#0f766e", letterSpacing: "0.04em" }}>POINT WALLET LIVE-FIX</div>
+         </div>
+@@ -4329,6 +4329,14 @@
+               <button type="button" onClick={() => openAction("transfer")} style={{ minHeight: 54, border: "1px solid rgba(45,212,191,0.28)", borderRadius: 16, background: "linear-gradient(90deg,#0f766e,#14b8a6)", color: "#effffb", fontWeight: 900, fontSize: 16, letterSpacing: "-0.02em", cursor: "pointer", boxShadow: "0 14px 28px rgba(20,184,166,0.16)" }}>포인트 보내기</button>
+               <button type="button" onClick={() => openAction("shop")} style={{ minHeight: 54, border: "1px solid rgba(14,116,144,0.22)", borderRadius: 16, background: "linear-gradient(90deg,#0f766e,#115e59)", color: "#effffb", fontWeight: 900, fontSize: 16, letterSpacing: "-0.02em", cursor: "pointer", boxShadow: "0 14px 28px rgba(15,118,110,0.14)" }}>상점 결제</button>
+             </div>
++            <div style={{ borderRadius: 14, border: "1px solid rgba(148,163,184,0.26)", background: "rgba(248,250,252,0.95)", padding: "11px 12px", marginBottom: 12 }}>
++              <div style={{ fontSize: 12, fontWeight: 800, color: "#0f766e", marginBottom: 5 }}>포인트 안내</div>
++              <div style={{ fontSize: 12, lineHeight: 1.7, color: "#475569" }}>
++                포인트 보내기: 회원을 선택하고 금액을 입력한 뒤 전송을 완료하세요.<br />
++                상점 결제: 결제할 상점을 선택하고 금액 확인 후 결제를 진행하세요.
++              </div>
++            </div>
+             <button type="button" disabled style={{ width: "100%", minHeight: 42, borderRadius: 14, border: "1px solid rgba(203,213,225,0.9)", background: "rgba(241,245,249,0.9)", color: "#94a3b8", fontWeight: 800, fontSize: 13, cursor: "not-allowed", opacity: 0.9, marginBottom: 16 }}>QR 결제 (준비중)</button>
+@@ -2510,6 +2518,14 @@
+   const payoutPortal = mountNode ? createPortal(
+     <div style={{ display: "grid", gap: 8, marginTop: 8 }}>
++      <div style={{ borderRadius: 12, border: "1px solid rgba(14,116,144,0.2)", background: "rgba(14,116,144,0.06)", padding: "10px 12px", marginBottom: 8 }}>
++        <div style={{ fontSize: 12, fontWeight: 800, color: "#0f766e", marginBottom: 4 }}>상점 지갑 안내</div>
++        <div style={{ fontSize: 12, lineHeight: 1.7, color: "#475569" }}>
++          VIP 상품권은 상점 적립금이 아닙니다. 아래 받은 이력에서만 확인해 주세요.<br />
++          지급요청은 가용 잔액을 확인한 뒤 지급요청 버튼을 눌러 신청해 주세요.
++        </div>
++      </div>
+       <div style={{ fontSize: 13, fontWeight: 900, color: "#0f172a", marginBottom: 2 }}>VIP 상품권 받은 이력</div>

@@ -1,0 +1,100 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '18.x'
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: ${{ env.NODE_VERSION }}
+        cache: 'npm'
+        
+    - name: Install frontend dependencies
+      run: npm ci
+      
+    - name: Install backend dependencies
+      run: |
+        cd server
+        npm ci
+        cd ..
+        
+    - name: Build frontend
+      run: npm run build
+      env:
+        NODE_ENV: production
+        
+    - name: Create deployment package
+      run: |
+        mkdir -p deploy
+        cp -r dist deploy/
+        cp -r server deploy/
+        rm -rf deploy/server/node_modules
+        cp package.json deploy/
+        cp ecosystem.config.js deploy/
+        
+    - name: Create tarball
+      run: |
+        tar -czf smi-app.tar.gz deploy/
+        
+    - name: Deploy to server via SSH
+      uses: appleboy/scp-action@v0.1.7
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        source: "smi-app.tar.gz"
+        target: "/tmp"
+        
+    - name: Extract and restart application
+      uses: appleboy/ssh-action@v1.0.3
+      with:
+        host: ${{ secrets.SERVER_HOST }}
+        username: ${{ secrets.SERVER_USER }}
+        key: ${{ secrets.SSH_PRIVATE_KEY }}
+        script: |
+          cd /var/www/smi
+          tar -xzf /tmp/smi-app.tar.gz
+          cp -r deploy/* .
+          rm -rf deploy
+          rm /tmp/smi-app.tar.gz
+          
+          # Install production dependencies in root (for PM2 execution context)
+          npm ci --omit=dev
+          
+          # Install production dependencies in server directory  
+          cd server
+          npm ci --omit=dev
+          cd ..
+          
+          # Reload PM2
+          pm2 reload ecosystem.config.js --env production
+          
+          # Reload Nginx
+          sudo nginx -t && sudo systemctl reload nginx
+          
+    - name: Health check
+      run: |
+        sleep 5
+        curl -f https://smi.ceo/api/health || exit 1
+        
+    - name: Notify deployment success
+      if: success()
+      run: echo "Deployment successful!"
+      
+    - name: Notify deployment failure
+      if: failure()
+      run: echo "Deployment failed!"

@@ -1,0 +1,40 @@
+[dotenv@17.2.3] injecting env (0) from .env -- tip: 📡 add observability to secrets: https://dotenvx.com/ops
+2026-01-28 23:51:56 [[32minfo[39m] Starting server in development mode
+2026-01-28 23:51:56 [[32minfo[39m] Database: SQLite
+2026-01-28 23:51:56 [[32minfo[39m] SQLite database connected
+2026-01-28 23:51:56 [[32minfo[39m] 📂 DB ABSOLUTE PATH: C:\smi\server\db.sqlite
+2026-01-28 23:51:56 [[32minfo[39m] Allowed origins: {"origins":["http://localhost:5174","http://localhost:8787"]}
+2026-01-28 23:51:56 [[32minfo[39m] Dist path check: {"path":"C:\\smi\\dist","exists":true}
+2026-01-28 23:51:56 [[32minfo[39m] Dist files: {"files":["assets","index.html","manifest.webmanifest","registerSW.js","sw.js","vite.svg","workbox-8c29f6e4.js"]}
+2026-01-28 23:51:56 [[32minfo[39m] SQLite tables initialized
+2026-01-28 23:51:56 [[32minfo[39m] posts table ensured
+2026-01-28 23:51:56 [[32minfo[39m] regions table ensured
+2026-01-28 23:51:56 [[32minfo[39m] shops table ensured
+2026-01-28 23:51:56 [[32minfo[39m] missions table ensured
+2026-01-28 23:51:56 [[32minfo[39m] events table ensured
+2026-01-28 23:51:56 [[32minfo[39m] banners table ensured
+2026-01-28 23:51:56 [[32minfo[39m] reviews table ensured
+2026-01-28 23:51:56 [[32minfo[39m] shop_earnings table ensured
+2026-01-28 23:51:56 [[32minfo[39m] shop_payout_requests table ensured
+2026-01-28 23:51:56 [[32minfo[39m] broadcasts table ensured
+2026-01-28 23:51:56 [[32minfo[39m] broadcast_comments table ensured
+2026-01-28 23:51:56 [[32minfo[39m] supplies table ensured
+2026-01-28 23:51:56 [[32minfo[39m] point_ledger table ensured
+2026-01-28 23:51:56 [[32minfo[39m] participations table ensured
+2026-01-28 23:51:56 [[32minfo[39m] configs table ensured
+2026-01-28 23:51:56 [[32minfo[39m] schedules table ensured
+2026-01-28 23:51:56 [[32minfo[39m] chats table ensured
+2026-01-28 23:51:56 [[32minfo[39m] friends table ensured
+2026-01-28 23:51:56 [[32minfo[39m] auditions table ensured
+2026-01-28 23:51:56 [[32minfo[39m] SQLite supply support tables ensured
+2026-01-28 23:51:56 [[32minfo[39m] Applying PV3 full restoration schema...
+2026-01-28 23:51:56 [[32minfo[39m] SQLite PV3 schema applied
+2026-01-28 23:51:56 [[32minfo[39m] PV3 full restoration schema completed
+2026-01-28 23:51:56 [[32minfo[39m] 📊 DB TABLE COUNTS: {"members":5,"missions":5,"events":0,"schedules":6,"shops":9,"supplies":1,"participations":6,"broadcasts":3}
+2026-01-28 23:51:56 [[32minfo[39m] Server listening on http://0.0.0.0:8787
+2026-01-28 23:52:05 [[32minfo[39m] [REQ] POST /api/supply-items {"query":{},"body":{"managerId":"SU_TEST_MANAGER","description":"","name":"E2E ??? ??","status":"available","quantity":10},"memberId":null,"contentType":"application/json"}
+2026-01-28 23:52:05 [[32minfo[39m] [RES] POST /api/supply-items {"status":403,"duration":"2ms","resultCount":0,"success":false}
+2026-01-28 23:52:05 [[32minfo[39m] HTTP Request {"method":"POST","url":"/api/supply-items","status":403,"duration":"3ms","ip":"127.0.0.1","userAgent":"Mozilla/5.0 (Windows NT; Windows NT 10.0; ko-KR) WindowsPowerShell/5.1.26100.7462"}
+2026-01-28 23:52:12 [[32minfo[39m] [REQ] GET /api/supply-items {"query":{},"memberId":null}
+2026-01-28 23:52:12 [[32minfo[39m] [RES] GET /api/supply-items {"status":200,"duration":"2ms","resultCount":0,"success":true}
+2026-01-28 23:52:12 [[32minfo[39m] HTTP Request {"method":"GET","url":"/api/supply-items","status":200,"duration":"2ms","ip":"127.0.0.1","userAgent":"Mozilla/5.0 (Windows NT; Windows NT 10.0; ko-KR) WindowsPowerShell/5.1.26100.7462"}

@@ -1,0 +1,17 @@
+{
+  "name": "Share Unity App",
+  "short_name": "ShareUnity",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#ffffff",
+  "theme_color": "#1976d2",
+  "description": "Share Unity App - installable PWA (placeholder manifest).",
+  "icons": [
+    {
+      "src": "/vite.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}

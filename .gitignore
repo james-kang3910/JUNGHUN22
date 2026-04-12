@@ -1,0 +1,63 @@
+# Node
+node_modules/
+/.pnp
+.pnp.js
+
+# build
+dist/
+
+# logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# env
+.env
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# sqlite
+server/db.sqlite
+server/data/
+!server/data/README.md
+*.db
+*.db-*
+*.sqlite
+
+# Backup files
+production-backup-*.json
+*-backup-*.json
+
+# Editor directories and files
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+
+# Exclude pull version folders and PV3 from pushes
+pull_version/
+pull_version2/
+pv3/
+
+# 업로드 파일 (Railway 재배포 시 초기화되므로 git 관리 불필요)
+server/uploads/
+
+# Do not push Markdown files (except important reports)
+*.md
+!PHASE1_STABILIZATION_REPORT.md
+!LEGACY_SYSTEM_ROOT_CAUSE_ANALYSIS.md
+!PARTICIPATIONS_FIX_SUMMARY.md
+!TEST_SNIPPETS_AB.md
+
+node_modules
+dist
+build
+.vite

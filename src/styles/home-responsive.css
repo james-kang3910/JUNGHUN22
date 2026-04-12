@@ -1,0 +1,116 @@
+:root{
+  --su-break-mobile: 768px;
+  --su-break-tablet-min: 769px;
+  --su-break-tablet-max: 1199px;
+  --su-break-desktop: 1200px;
+  --su-container-max: 1280px; /* PC max width: 조정 가능 (1200~1400 권장) */
+  --su-gap: 18px;
+  --su-bottomnav-height: 60px; /* 실제 Bottomnav 높이에 맞춰 조정하세요 (BottomNav default height=60) */
+}
+
+  /* ===== Home-only overrides (force wider container without touching global/index.css) ===== */
+  /* Ensure Home uses a wider container like folder pages. Use high specificity + !important to override older rules. */
+  .su-page.su-home,
+  .su-home {
+    width: 100% !important;
+    max-width: 1280px !important; /* desktop maximum for Home */
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+    margin: 0 auto !important;
+    box-sizing: border-box;
+    /* ensure bottom nav doesn't cover content */
+    padding-bottom: calc(var(--su-bottomnav-height, 60px) + 12px) !important;
+  }
+
+  @media (min-width: 769px) and (max-width: 1199px) {
+    .su-page.su-home, .su-home {
+      max-width: 960px !important; /* tablet larger width */
+      padding-left: 20px !important;
+      padding-right: 20px !important;
+    }
+  }
+
+  @media (min-width: 1200px) {
+    .su-page.su-home, .su-home {
+      max-width: 1280px !important; /* PC: wider container */
+      padding-left: 24px !important;
+      padding-right: 24px !important;
+    }
+  }
+
+  /* Home 전용 컨테이너 (모바일 full-width, PC centered) */
+  .su-container {
+    width: 100%;
+    padding-left: 16px;
+    padding-right: 16px;
+    margin: 0 auto;
+    box-sizing: border-box;
+  }
+  @media (min-width: var(--su-break-desktop)) {
+    .su-container {
+      max-width: var(--su-container-max);
+      padding-left: 24px;
+      padding-right: 24px;
+    }
+  }
+
+  /* Home layout wrapper */
+  .su-home__layout {
+    display: block;
+    gap: var(--su-gap);
+  }
+  .su-home__main { width: 100%; box-sizing: border-box; }
+  .su-home__sidebar { display: none; }
+
+  @media (min-width: var(--su-break-desktop)) {
+    .su-home__layout {
+      display: grid;
+      grid-template-columns: 1fr 340px;
+      gap: 28px;
+      align-items: start;
+    }
+    .su-home__sidebar { display: block; }
+  }
+
+  /* Panels grid */
+  .su-panels {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: var(--su-gap);
+  }
+  @media (min-width: 769px) and (max-width: 1199px) {
+    .su-panels { grid-template-columns: repeat(2, minmax(0,1fr)); }
+  }
+  @media (min-width: var(--su-break-desktop)) {
+    .su-panels { grid-template-columns: repeat(3, minmax(0,1fr)); }
+  }
+
+  /* Tiles */
+  .su-tiles { display: grid; gap: 12px; grid-template-columns: repeat(2, minmax(0,1fr)); }
+  @media (min-width: 769px) { .su-tiles { grid-template-columns: repeat(3, minmax(0,1fr)); } }
+  @media (min-width: var(--su-break-desktop)) { .su-tiles { grid-template-columns: repeat(6, minmax(0,1fr)); } }
+
+  /* Hero full width of container */
+  .su-hero2 { width: 100%; }
+
+  /* Carousel track + card sizing */
+  .su-carousel__viewport { width: 100%; overflow: hidden; }
+  .su-carousel__track { display: flex; gap: 12px; align-items: stretch; scroll-behavior: smooth; scroll-snap-type: x mandatory; }
+  .su-carouselCard { min-width: 240px; flex: 0 0 auto; scroll-snap-align: start; }
+  @media (min-width: 1200px) { .su-carouselCard { min-width: 200px; } } /* PC 권장: 180~220px 범위로 조정 가능 */
+
+  /* Bottomnav padding to avoid overlap */
+  .su-page { padding-bottom: calc(var(--su-bottomnav-height) + 12px); }
+
+  /* Bottomnav fixed placeholder - adapt if actual class differs */
+  .su-bottomnav {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    height: var(--su-bottomnav-height);
+    z-index: 10000;
+  }
+
+  /* Preserve image aspect and cover */
+  .su-cardThumb img, .su-hero2 img { width: 100%; height: 100%; object-fit: cover; }

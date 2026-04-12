@@ -1,0 +1,853 @@
+:root{
+  --bg:#070A12;
+  --appHeaderH: 64px;
+  --panel: rgba(255,255,255,.06);
+  --panel2: rgba(255,255,255,.09);
+  --border: rgba(255,255,255,.12);
+  --text: rgba(255,255,255,.92);
+  --muted: rgba(255,255,255,.62);
+  --muted2: rgba(255,255,255,.48);
+  --accent: rgba(140,180,255,.9);
+  --accent2: rgba(120,255,210,.75);
+
+  /* Safe Area */
+  --safeTop: env(safe-area-inset-top, 0px);
+  --safeBottom: env(safe-area-inset-bottom, 0px);
+
+  /* Layout */
+  --navH: 76px;          /* ✅ bottomNav 높이 */
+  --pagePadX: 16px;
+
+  /* ✅ 안드 크롬 상단 잘림 방지 여유 */
+  --topPadExtra: 18px;
+}
+
+*{ box-sizing:border-box; -webkit-tap-highlight-color: transparent; }
+html, body, #root{ height:100%; width:100%; }
+body{
+  margin:0;
+  overflow-x:hidden; /* ✅ 좌우 밀림 방지 */
+  /* Prevent body from creating a separate vertical scroll container.
+     .su-appBody is the single vertical scroller for the app. */
+  overflow-y: hidden;
+  background: radial-gradient(1200px 600px at 20% -10%, rgba(140,180,255,.18), transparent 60%),
+              radial-gradient(900px 500px at 80% 0%, rgba(120,255,210,.12), transparent 60%),
+              var(--bg);
+  color:var(--text);
+  font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, "Noto Sans KR", "Apple SD Gothic Neo", sans-serif;
+}
+
+button, input{ font: inherit; color: inherit; }
+button{ cursor:pointer; }
+
+/* ==========================
+   App Shell + Page
+========================== */
+.su-appShell{
+  min-height:100vh;
+  width:100%;
+}
+
+/* ✅ 페이지 공통: 상단/하단 안전영역 확보 */
+.su-appBody{
+  /* App shell is the single vertical scroller.
+     Use min-height:100dvh so mobile address bar/resizing is handled reliably. */
+  min-height: 100dvh;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.su-page, .su-home{
+  width:100%;
+  /* Ensure pages don't force their own scroll area: let .su-appBody handle vertical scrolling */
+  height: auto;
+  min-height: 0;
+
+  padding-top: calc(var(--topPadExtra) + var(--safeTop));
+  padding-left: var(--pagePadX);
+  padding-right: var(--pagePadX);
+
+  /* 하단 네비 가림 방지 is handled by AppBody padding-bottom (inline in App.jsx)
+     keep page-level padding-bottom minimal so no nested scrolls occur */
+  padding-bottom: 0;
+
+  /* ✅ 데스크탑 과확장 방지 */
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+/* Home specific responsive width: relax mobile cap at larger breakpoints
+   Inserted here near page rules so it overrides more generic constraints. */
+.su-home{
+  width: 100%;
+  max-width: 420px; /* mobile default */
+  margin: 0 auto;
+}
+@media (min-width: 768px){
+  .su-home{ max-width: 860px; }
+}
+@media (min-width: 1024px){
+  .su-home{ max-width: 1100px; }
+}
+
+/* ==========================
+   Top Bar
+========================== */
+.su-top{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  padding: 10px 12px;
+  border:1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,.03));
+  border-radius: 18px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+
+  /* ✅ 혹시라도 잘림 방지 */
+  overflow: visible;
+}
+
+.su-brandRow{ display:flex; align-items:center; gap:10px; }
+.su-logoMark{ opacity:.9; }
+.su-brand{ font-weight:900; letter-spacing:.2px; font-size:16px; }
+
+.su-top__right{ display:flex; align-items:center; gap:8px; }
+
+/* ✅ 상단 pill 그룹(입력/검색/메뉴) 세로글자 방지 */
+.su-pillGroup{
+  display:flex;
+  gap:8px;
+  flex-wrap:nowrap;
+  min-width:0;
+}
+.su-pill{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:6px;
+
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow-wrap: normal;
+
+  min-width: 52px;       /* ✅ Z폴드 커버에서도 한 줄 유지 */
+  padding: 10px 12px;
+  font-size: 13px;
+  line-height: 1;
+
+  border-radius: 999px;
+  border:1px solid var(--border);
+  background: rgba(255,255,255,.04);
+}
+@media (max-width: 420px){
+  :root{ --pagePadX: 12px; }
+  .su-pill{ min-width: 46px; padding: 8px 10px; font-size: 12px; }
+}
+
+.su-iconBtn{
+  width:40px; height:40px;
+  border-radius: 14px;
+  border:1px solid var(--border);
+  background: rgba(255,255,255,.04);
+}
+.su-iconBtn:active{ transform: scale(.98); }
+
+/* ==========================
+   Hero2 (Home.jsx 기준)
+========================== */
+.su-hero2{
+  position:relative;
+  margin-top:14px;
+  border-radius: 22px;
+  border:1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,.03));
+  overflow: visible; /* ✅ 타이틀 테두리/그림자 잘림 방지 */
+}
+
+/* Audition page top padding (in case header is fixed/absolute) */
+.su-auditionPage{
+  /* Audition top wrapper: let AppBody handle vertical scrolling.
+     Ensure header height + safe-area is reserved so content doesn't appear
+     under the OS notch or app header. */
+  overflow: visible;
+  height: auto;
+  min-height: 0;
+  padding-top: calc(var(--appHeaderH) + 16px + env(safe-area-inset-top));
+}
+
+.su-cityGlow{
+  position:absolute;
+  inset:-60px -60px auto auto;
+  width: 220px; height: 220px;
+  background: radial-gradient(circle at 30% 30%, rgba(140,180,255,.55), transparent 60%);
+  filter: blur(10px);
+  opacity:.7;
+  pointer-events:none;
+}
+
+.su-hero2__titleWrap{ padding: 16px 14px 0; }
+.su-hero2__title{
+  font-size: 18px;
+  font-weight: 900;
+  letter-spacing: -.2px;
+
+  line-height: 1.18;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  overflow: visible; /* ✅ 상단 짤림 방지 */
+}
+
+/* Search Bar */
+.su-searchBar{
+  margin: 10px 14px 14px;
+  display:flex;
+  align-items:center;
+  gap:10px;
+  border-radius: 18px;
+  border: 1px solid var(--border);
+  background: rgba(0,0,0,.25);
+  padding: 10px 10px;
+}
+.su-searchIcon{ opacity:.8; }
+.su-searchInput{
+  flex:1;
+  height: 34px;
+  border:0;
+  outline:none;
+  background: transparent;
+}
+.su-searchInput::placeholder{ color: rgba(255,255,255,.35); }
+
+.su-searchBtn{
+  height: 36px;
+  padding: 0 14px;
+  border-radius: 999px;
+  border: 1px solid rgba(140,180,255,.35);
+  background: linear-gradient(180deg, rgba(140,180,255,.35), rgba(140,180,255,.15));
+}
+
+/* ==========================
+   Tiles (Home.jsx 기준)
+========================== */
+.su-tiles{
+  margin-top: 14px;
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+.su-tile{
+  text-align:left;
+  border-radius: 22px;
+  border: 1px solid var(--border);
+  background: rgba(255,255,255,.03);
+  padding: 14px;
+  display:flex;
+  gap: 12px;
+  align-items:center;
+  min-width:0;
+}
+.su-tile__icon{
+  width: 44px; height: 44px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,.16);
+  background: rgba(255,255,255,.05);
+  display:flex; align-items:center; justify-content:center;
+  font-size: 18px;
+}
+.su-tile__title{ font-weight: 900; font-size: 15px; }
+.su-tile__sub{ margin-top: 4px; font-size: 12px; color: var(--muted); line-height: 1.25; }
+
+@media (max-width: 420px){
+  .su-tiles{ gap: 10px; }
+  .su-tile{ padding: 12px; border-radius: 20px; }
+  .su-tile__title{ font-size: 14px; }
+}
+
+/* ==========================
+   Panels (공지/실시간)
+========================== */
+.su-panel{
+  margin-top: 14px;
+  border:1px solid var(--border);
+  background: rgba(255,255,255,.03);
+  border-radius: 22px;
+  padding: 10px 10px 12px;
+}
+.su-panelHead{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap: 10px;
+  padding: 4px 2px 10px;
+}
+.su-panelTitle{ font-weight:900; font-size: 15px; }
+.su-panelMore{
+  border:1px solid var(--border);
+  background: rgba(255,255,255,.04);
+  padding: 10px 12px;
+  border-radius: 14px;
+  font-size: 12px;
+}
+.su-panelMore:active{ transform: scale(.99); }
+
+.su-noticeBody{
+  border-radius: 18px;
+  border:1px solid rgba(255,255,255,.10);
+  background: rgba(0,0,0,.18);
+  padding: 12px;
+}
+.su-noticeMeta{ display:flex; align-items:center; gap: 8px; color: var(--muted); font-size: 12px; }
+.su-avatar{
+  width: 28px; height: 28px; border-radius: 14px;
+  border:1px solid rgba(255,255,255,.14);
+  background: rgba(255,255,255,.04);
+  display:flex; align-items:center; justify-content:center;
+}
+.su-dot{ opacity:.6; }
+.su-noticeText{ margin-top: 10px; color: rgba(255,255,255,.82); font-size: 13px; line-height: 1.35; }
+
+.su-shortRow{
+  margin-top: 10px;
+  display:grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+.su-short{
+  border-radius: 18px;
+  border:1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.04);
+  padding: 12px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap: 10px;
+}
+.su-shortText{ font-weight:900; white-space:nowrap; }
+
+.su-liveRail{
+  display:flex;
+  gap: 10px;
+  overflow-x:auto;
+  overflow-y:hidden;
+  padding-bottom: 6px;
+  -webkit-overflow-scrolling: touch;
+}
+.su-liveRail::-webkit-scrollbar{ height: 0px; }
+.su-liveCard{
+  width: 200px;
+  flex: 0 0 auto;
+  border-radius: 18px;
+  border:1px solid rgba(255,255,255,.12);
+  background: rgba(255,255,255,.04);
+  padding: 12px;
+  text-align:left;
+}
+.su-liveThumb, .su-media { position: relative; }
+.su-liveBadge{
+  display:inline-flex;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border:1px solid rgba(255,255,255,.16);
+  background: rgba(0,0,0,.22);
+  font-size: 11px;
+  margin-bottom: 8px;
+}
+.su-liveTitle{ font-weight: 900; font-size: 14px; }
+.su-liveSub{ margin-top: 6px; font-size: 12px; color: var(--muted); line-height: 1.25; }
+
+/* ==========================
+   Carousel / Scroll-snap helpers (refactored)
+   - Mobile: 1 item full-width
+   - Tablet: 2 items (calc((100% - gap)/2))
+   - Desktop: 3 items (calc((100% - 2*gap)/3))
+   - Use a viewport wrapper (.su-carousel__viewport) with overflow:hidden to prevent half-card peeking
+========================== */
+.su-carousel{
+  position: relative;
+  display: block;
+}
+
+/* viewport that clips the track to avoid half-visible cards */
+.su-carousel__viewport{
+  width: 100%;
+  overflow: hidden; /* remove half-card peeking */
+  position: relative; /* make buttons absolute relative to viewport */
+  display: flex;
+  align-items: center; /* center track and overlay buttons to thumbnail height */
+}
+
+.su-carousel__track{
+  display: flex;
+  gap: 12px; /* default gap used in breakpoint math */
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch;
+  padding: 0; /* keep track flush inside viewport */
+  width: 100%;
+}
+.su-carousel__track::-webkit-scrollbar{ height: 0px; }
+
+/* each card: use flex-basis via calc so breakpoints are exact and consider gaps */
+.su-carousel__item,
+.su-carouselCard{
+  flex: 0 0 100%; /* mobile: full width */
+  scroll-snap-align: start;
+  min-width: 100%;
+  max-width: 100%;
+}
+
+.su-carouselBtn{
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 50;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+  border: 1px solid rgba(255,255,255,0.08);
+  background: rgba(0,0,0,0.35);
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 20px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  transition: transform 160ms ease, opacity 160ms ease;
+  opacity: 0.9;
+}
+.su-carouselBtn:hover{ transform: translateY(-50%) scale(1.06); opacity: 1; }
+.su-carouselBtn:active{ transform: translateY(-50%) scale(.98); }
+.su-carouselBtn--left{ left: 10px; }
+.su-carouselBtn--right{ right: 10px; }
+
+/* Button variant rendered inside thumbnail (.su-media) */
+.su-carouselBtn--inside{
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 5;
+  width: 40px;
+  height: 40px;
+  border-radius: 10px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.45);
+  border: 1px solid rgba(255,255,255,0.06);
+  color: var(--text);
+  font-size: 18px;
+}
+.su-carouselBtn--inside.su-carouselBtn--left{ left: 10px; }
+.su-carouselBtn--inside.su-carouselBtn--right{ right: 10px; }
+
+/* utility to hide buttons when at start/end */
+.su-carouselBtn.hidden{ display: none; pointer-events: none; opacity: 0; }
+
+/* Video embed helpers (non-intrusive) */
+.su-videoEmbed__media{
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+  border-radius: inherit;
+  object-fit: cover;
+}
+
+/* Tablet & Desktop: adjust tile/grid and compute exact card widths */
+@media (min-width: 600px){
+  /* Tiles: small tablet - show 2 columns */
+  .su-tiles{ grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+  :root{ --carousel-gap: 16px; }
+  .su-carousel__track{ gap: var(--carousel-gap); }
+
+  /* Two cards per view */
+  .su-carousel__item,
+  .su-carouselCard{
+    flex: 0 0 calc((100% - var(--carousel-gap)) / 2);
+    min-width: calc((100% - var(--carousel-gap)) / 2);
+    max-width: calc((100% - var(--carousel-gap)) / 2);
+  }
+}
+
+@media (min-width: 900px){
+  /* Tiles: larger tablet - show 3 columns */
+  .su-tiles{ grid-template-columns: repeat(3, minmax(0, 1fr)); }
+
+  :root{ --carousel-gap: 20px; }
+  .su-carousel__track{ gap: var(--carousel-gap); }
+
+  /* Three cards per view */
+  .su-carousel__item,
+  .su-carouselCard{
+    flex: 0 0 calc((100% - (2 * var(--carousel-gap))) / 3);
+    min-width: calc((100% - (2 * var(--carousel-gap))) / 3);
+    max-width: calc((100% - (2 * var(--carousel-gap))) / 3);
+  }
+}
+
+@media (min-width: 1200px){
+  /* Tiles: desktop - show 4 columns */
+  .su-tiles{ grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+/* Ensure no half-cut cards: keep track flush inside viewport */
+.su-carousel__track{ padding-left: 0; padding-right: 0; }
+
+/* Modal / Lightbox styles used by Home.jsx internal modal */
+.su-modal-overlay{
+  position: fixed;
+  inset: 0;
+  background: rgba(2,6,12,0.72);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100000;
+  padding: 20px;
+}
+.su-modal-content{
+  width: min(1000px, 96vw);
+  max-width: 1100px;
+  border-radius: 14px;
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.02));
+  border: 1px solid rgba(255,255,255,0.06);
+  padding: 16px;
+  position: relative;
+}
+.su-modal-close{
+  position: absolute;
+  right: 12px;
+  top: 12px;
+  background: rgba(0,0,0,0.35);
+  border: 1px solid rgba(255,255,255,0.06);
+  color: var(--text);
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+}
+.su-modal-body{ width: 100%; }
+.su-modal-title{ font-size: 16px; color: var(--text); }
+
+/* ==========================================================
+   ✅ Bottom Nav (Home.jsx에서 className="bottomNav")
+   - 글자 가로 고정
+   - 5개 균등
+   - 박스 크기 완전 동일
+   - 중앙 몰림/줄바꿈/세로글자 방지
+========================================================== */
+.bottomNavSpacer{
+  height: calc(var(--navH) + 20px + var(--safeBottom));
+}
+
+/* ✅ 컨테이너: 중앙 정렬 + 폭 제한(폴드/PC 안정) */
+.bottomNav{
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(10px + var(--safeBottom));
+  width: min(720px, calc(100vw - 24px));
+  height: var(--navH);
+  z-index: 9999;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+
+  padding: 10px 12px;
+  border-radius: 22px;
+
+  background:
+    radial-gradient(120% 120% at 50% -20%, rgba(130,190,255,0.12), rgba(0,0,0,0) 55%),
+    rgba(10,12,16,0.72);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255,255,255,0.10);
+  box-shadow: 0 14px 40px rgba(0,0,0,0.45);
+}
+
+/* ✅ 각 아이템: 동일한 박스 크기 */
+.bottomNav .navItem{
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+
+  display:flex;
+  flex-direction: column;
+  align-items:center;
+  justify-content:center;
+  gap: 6px;
+
+  border-radius: 16px;
+  padding: 8px 6px;
+
+  color: rgba(255,255,255,.78);
+
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow-wrap: normal;
+
+  transition: transform 120ms ease, background 120ms ease, color 120ms ease;
+}
+.bottomNav .navItem:active{ transform: scale(.98); }
+
+.bottomNav .navIcon{
+  width: 34px;
+  height: 30px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.06);
+  font-size: 15px;
+}
+
+/* ✅ 라벨: 무조건 가로 + 축약 */
+.bottomNav .navLabel{
+  font-size: 12px;
+  line-height: 1.05;
+  font-weight: 800;
+  letter-spacing: -0.3px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* Form/grid helpers used by AuditionDetail/BroadcastDetail */
+.su-formRow{
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+.su-label{
+  width: 120px;
+  flex: 0 0 120px;
+  font-size: 13px;
+  color: rgba(255,255,255,0.9);
+  display: flex;
+  align-items: center;
+}
+.su-input{
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.18);
+  color: rgba(255,255,255,0.95);
+}
+.su-textarea{
+  width: 100%;
+  padding: 8px 10px;
+  min-height: 88px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.18);
+  color: rgba(255,255,255,0.95);
+}
+.su-videoBox{
+  border-radius: 14px;
+  padding: 8px;
+  background: rgba(0,0,0,0.18);
+  border: 1px solid rgba(255,255,255,0.12);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* ✅ 활성 */
+.bottomNav .navItem.is-active{
+  color: rgba(255,255,255,.95);
+  background: rgba(140,180,255,.12);
+  box-shadow: 0 0 0 1px rgba(140,180,255,.25) inset;
+}
+
+/* ✅ 커버(좁음)에서는 조금 더 압축 */
+@media (max-width: 420px){
+  .bottomNav{
+    width: calc(100vw - 18px);
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 18px;
+  }
+  .bottomNav .navItem{
+    gap: 5px;
+    padding: 8px 4px;
+    border-radius: 14px;
+  }
+  .bottomNav .navLabel{
+    font-size: 11px;
+    letter-spacing: -0.5px;
+  }
+}
+/* ==========================================================
+   ✅ FIX: App.jsx의 su-bottomNav도 Home의 bottomNav와 동일 규칙 적용
+   - 기능 수정 0
+   - 정중앙/균등/nowrap/ellipsis 강제
+========================================================== */
+
+/* App.jsx 네비도 bottomNav와 동일한 위치/폭/레이아웃을 갖게 */
+.su-bottomNav{
+  position: fixed;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(10px + var(--safeBottom));
+  width: min(720px, calc(100vw - 24px));
+  height: var(--navH);
+  z-index: 9999;
+
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+
+  padding: 10px 12px;
+  border-radius: 22px;
+
+  background:
+    radial-gradient(120% 120% at 50% -20%, rgba(130,190,255,0.12), rgba(0,0,0,0) 55%),
+    rgba(10,12,16,0.72);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255,255,255,0.10);
+  box-shadow: 0 14px 40px rgba(0,0,0,0.45);
+}
+
+/* Enhance bottom nav text legibility while keeping dark/glass tone */
+.su-bottomNav, .bottomNav{
+  color: rgba(255,255,255,.88);
+  text-shadow: 0 1px 6px rgba(0,0,0,0.6);
+  -webkit-text-stroke: 0.2px rgba(255,255,255,0.06);
+}
+
+/* App.jsx 네비 아이템 균등 */
+.su-bottomNav .su-navItem{
+  flex: 1 1 0;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+
+  display:flex;
+  flex-direction: column;
+  align-items:center;
+  justify-content:center;
+  gap: 6px;
+
+  border-radius: 16px;
+  padding: 8px 6px;
+
+  color: rgba(255,255,255,.78);
+
+  white-space: nowrap;
+  word-break: keep-all;
+  overflow-wrap: normal;
+}
+.su-bottomNav .su-navItem:active{ transform: scale(.98); }
+
+/* 아이콘/라벨도 강제 고정 */
+.su-bottomNav .su-navIcon{
+  width: 34px;
+  height: 30px;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  border-radius: 14px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.06);
+  font-size: 15px;
+}
+.su-bottomNav .su-navLabel{
+  font-size: 12px;
+  line-height: 1.05;
+  font-weight: 800;
+  letter-spacing: -0.3px;
+
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+/* 활성 */
+.su-bottomNav .su-navItem.is-active{
+  color: rgba(255,255,255,.95);
+  background: rgba(140,180,255,.12);
+  box-shadow: 0 0 0 1px rgba(140,180,255,.25) inset;
+}
+
+/* 좁은 화면 대응 */
+@media (max-width: 420px){
+  .su-bottomNav{
+    width: calc(100vw - 18px);
+    gap: 6px;
+    padding: 8px 10px;
+    border-radius: 18px;
+  }
+  .su-bottomNav .su-navItem{
+    gap: 5px;
+    padding: 8px 4px;
+    border-radius: 14px;
+  }
+  .su-bottomNav .su-navLabel{
+    font-size: 11px;
+    letter-spacing: -0.5px;
+  }
+}
+
+/* ==========================================================
+   ✅ 미디어 임베드 (스코프 제한: .su-cardThumb 내부만)
+   - 전면 덮기 방지: position: relative, inset: auto
+========================================================== */
+.su-cardThumb {
+  position: relative;
+  display: block;
+}
+
+.su-cardThumb .su-mediaWrap {
+  position: relative !important;
+  inset: auto !important;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  overflow: hidden;
+  max-width: 100%;
+  border-radius: inherit;
+}
+
+.su-cardThumb .su-mediaWrap iframe,
+.su-cardThumb .su-mediaWrap video {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+  border: 0;
+  border-radius: inherit;
+}
+
+.su-cardThumb .su-mediaEl {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  z-index: 2;
+}
+
+.su-cardThumb .su-mediaPlaceholder,
+.su-cardThumb .media-placeholder {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}

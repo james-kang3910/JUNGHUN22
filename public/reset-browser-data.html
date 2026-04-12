@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>브라우저 데이터 초기화</title>
+  <style>
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      max-width: 600px;
+      margin: 50px auto;
+      padding: 20px;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+    }
+    .container {
+      background: white;
+      border-radius: 16px;
+      padding: 32px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    h1 {
+      color: #333;
+      margin-top: 0;
+    }
+    button {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 8px;
+      font-size: 16px;
+      font-weight: bold;
+      cursor: pointer;
+      width: 100%;
+      margin-bottom: 12px;
+      transition: transform 0.2s;
+    }
+    button:hover {
+      transform: translateY(-2px);
+    }
+    button:active {
+      transform: translateY(0);
+    }
+    button.danger {
+      background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+    }
+    .info {
+      background: #e7f3ff;
+      padding: 16px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      border-left: 4px solid #2196F3;
+    }
+    .log {
+      background: #f5f5f5;
+      padding: 16px;
+      border-radius: 8px;
+      margin-top: 20px;
+      max-height: 200px;
+      overflow-y: auto;
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+    }
+    .log-item {
+      margin-bottom: 8px;
+      padding: 4px;
+    }
+    .log-item.success {
+      color: #4caf50;
+    }
+    .log-item.error {
+      color: #f44336;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>🧹 브라우저 데이터 초기화</h1>
+    
+    <div class="info">
+      ⚠️ <strong>주의:</strong> 이 작업은 모든 브라우저 저장 데이터를 삭제합니다. 
+      진행 전 중요한 데이터를 백업하세요.
+    </div>
+
+    <button onclick="clearLocalStorage()">
+      🗑️ localStorage 초기화
+    </button>
+
+    <button onclick="clearSessionStorage()">
+      🗑️ sessionStorage 초기화
+    </button>
+
+    <button onclick="clearIndexedDB()">
+      🗑️ IndexedDB 초기화
+    </button>
+
+    <button onclick="clearServiceWorkers()">
+      🗑️ Service Worker 해제
+    </button>
+
+    <button onclick="clearCaches()">
+      🗑️ 캐시 삭제
+    </button>
+
+    <button class="danger" onclick="clearAll()">
+      💥 모두 초기화 (전체 삭제)
+    </button>
+
+    <div id="log" class="log" style="display: none;">
+      <strong>작업 로그:</strong>
+      <div id="logContent"></div>
+    </div>
+  </div>
+
+  <script>
+    const logDiv = document.getElementById('log');
+    const logContent = document.getElementById('logContent');
+
+    function addLog(message, type = 'success') {
+      logDiv.style.display = 'block';
+      const item = document.createElement('div');
+      item.className = `log-item ${type}`;
+      item.textContent = `${new Date().toLocaleTimeString()} - ${message}`;
+      logContent.appendChild(item);
+      logDiv.scrollTop = logDiv.scrollHeight;
+    }
+
+    function clearLocalStorage() {
+      try {
+        const count = localStorage.length;
+        localStorage.clear();
+        addLog(`✅ localStorage 초기화 완료 (${count}개 항목 삭제)`);
+      } catch (e) {
+        addLog(`❌ localStorage 초기화 실패: ${e.message}`, 'error');
+      }
+    }
+
+    function clearSessionStorage() {
+      try {
+        const count = sessionStorage.length;
+        sessionStorage.clear();
+        addLog(`✅ sessionStorage 초기화 완료 (${count}개 항목 삭제)`);
+      } catch (e) {
+        addLog(`❌ sessionStorage 초기화 실패: ${e.message}`, 'error');
+      }
+    }
+
+    async function clearIndexedDB() {
+      try {
+        if (!window.indexedDB) {
+          addLog('⚠️ IndexedDB를 지원하지 않는 브라우저입니다', 'error');
+          return;
+        }
+        const dbs = await indexedDB.databases();
+        let count = 0;
+        for (const db of dbs) {
+          await indexedDB.deleteDatabase(db.name);
+          count++;
+        }
+        addLog(`✅ IndexedDB 초기화 완료 (${count}개 DB 삭제)`);
+      } catch (e) {
+        addLog(`❌ IndexedDB 초기화 실패: ${e.message}`, 'error');
+      }
+    }
+
+    async function clearServiceWorkers() {
+      try {
+        if (!('serviceWorker' in navigator)) {
+          addLog('⚠️ Service Worker를 지원하지 않는 브라우저입니다', 'error');
+          return;
+        }
+        const registrations = await navigator.serviceWorker.getRegistrations();
+        let count = 0;
+        for (const registration of registrations) {
+          await registration.unregister();
+          count++;
+        }
+        addLog(`✅ Service Worker 해제 완료 (${count}개 해제)`);
+      } catch (e) {
+        addLog(`❌ Service Worker 해제 실패: ${e.message}`, 'error');
+      }
+    }
+
+    async function clearCaches() {
+      try {
+        if (!('caches' in window)) {
+          addLog('⚠️ Cache API를 지원하지 않는 브라우저입니다', 'error');
+          return;
+        }
+        const names = await caches.keys();
+        let count = 0;
+        for (const name of names) {
+          await caches.delete(name);
+          count++;
+        }
+        addLog(`✅ 캐시 삭제 완료 (${count}개 삭제)`);
+      } catch (e) {
+        addLog(`❌ 캐시 삭제 실패: ${e.message}`, 'error');
+      }
+    }
+
+    async function clearAll() {
+      if (!confirm('⚠️ 정말로 모든 브라우저 데이터를 삭제하시겠습니까?')) {
+        return;
+      }
+
+      addLog('🚀 전체 초기화 시작...');
+      
+      clearLocalStorage();
+      clearSessionStorage();
+      await clearIndexedDB();
+      await clearServiceWorkers();
+      await clearCaches();
+
+      addLog('🎉 모든 브라우저 데이터가 초기화되었습니다!');
+      addLog('💡 페이지를 새로고침합니다...');
+
+      setTimeout(() => {
+        location.reload();
+      }, 2000);
+    }
+  </script>
+</body>
+</html>
