@@ -150,7 +150,7 @@ export default function Auth() {
 
   // 회원가입 폼
   const [signUpForm, setSignUpForm] = useState({
-    name: "", phone: "", userId: "", password: "", passwordConfirm: "", regionId: "",
+    name: "", phone: "", userId: "", password: "", passwordConfirm: "", regionId: "", districtId: "",
   });
   const [signUpErrors, setSignUpErrors] = useState({});
   const [agreements, setAgreements] = useState({
@@ -284,7 +284,8 @@ export default function Auth() {
   };
 
   const selectRegion = (region) => {
-    setSignUpForm({ ...signUpForm, regionId: region.id });
+    const autoDistrict = String(region?.city || region?.district || '').trim();
+    setSignUpForm({ ...signUpForm, regionId: region.id, districtId: autoDistrict });
     closeRegionModal();
   };
 
@@ -470,6 +471,7 @@ export default function Auth() {
         nickname: "",
         region: selectedRegion ? selectedRegion.name : "",
         regionId: signUpForm.regionId,
+        districtId: signUpForm.districtId || null,
         email: signUpForm.userId, // ★ 이메일(아이디) 저장
       });
       setLoading(false);

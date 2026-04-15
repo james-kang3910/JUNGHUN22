@@ -359,7 +359,8 @@ export default function AdminContents() {
           setToast({ open: true, message: "배너 제목을 입력해주세요.", type: "error" });
           return;
         }
-        if (!imageUrl) {
+        // 신규 등록 시에만 이미지 필수 (수정 시에는 이미지 삭제 허용)
+        if (!imageUrl && !editingItem) {
           setToast({ open: true, message: "배너 이미지를 등록해주세요.", type: "error" });
           return;
         }
@@ -381,7 +382,7 @@ export default function AdminContents() {
         }
         processedData.title = title;
         processedData.description = description;
-        processedData.imageUrl = imageUrl;
+        processedData.imageUrl = imageUrl || null;
         processedData.videoUrl = '';
         processedData.alt = title;
         delete processedData.gradientEnabled;
@@ -627,6 +628,29 @@ export default function AdminContents() {
         }
       }
 
+      baseFields.push({
+        key: "imageUrl",
+        label: "공지 이미지",
+        type: "custom",
+        customRender: (value, onChange) => (
+          <MultiImageUploader
+            value={value ? [value] : []}
+            maxImages={1}
+            onChange={(nextImages) => {
+              const nextUrl = Array.isArray(nextImages) && nextImages[0] ? nextImages[0] : "";
+              onChange(nextUrl);
+              setPreviewImage(nextUrl || null);
+            }}
+            uploadImage={async (file) => {
+              const result = await storageAdapter.uploadContentImage(file, { context: 'notices' });
+              return result.imageUrl || result.url || "";
+            }}
+            onError={(message) => setToast({ open: true, message, type: 'error' })}
+            helperText="공지 이미지는 1장까지 등록할 수 있습니다."
+          />
+        ),
+      });
+
       baseFields.push(
         { key: "isPopup", label: "메인 팝업 노출", type: "checkbox", placeholder: "팝업" },
         { key: "isPinned", label: "상단 고정", type: "checkbox", placeholder: "고정" },
@@ -734,7 +758,7 @@ export default function AdminContents() {
                         JPEG, PNG, GIF, WebP (최대 10MB)
                       </div>
                       <div style={{ fontSize: 11, opacity: 0.5, marginTop: 4 }}>
-                        16:9 비율 이미지 사용 권장 (1280x720 이상)
+                        4:1 비율 이미지 사용 권장 (1600x400 이상)
                       </div>
                     </div>
                   )}

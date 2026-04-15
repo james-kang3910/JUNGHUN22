@@ -52,6 +52,7 @@ export default function AdminAuditions() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+  const [imageUploading, setImageUploading] = useState(false);
 
   // Modal/Dialog 상태
   const [modalOpen, setModalOpen] = useState(false);
@@ -164,12 +165,14 @@ export default function AdminAuditions() {
     setEditingItem(null);
     setCurrentFormData({});
     setDistricts([]);
+    setImageUploading(false);
     setModalOpen(true);
   };
 
   const openEditModal = (item) => {
     setEditingItem(item);
     setCurrentFormData(item || {});
+    setImageUploading(false);
     setModalOpen(true);
   };
 
@@ -350,15 +353,14 @@ export default function AdminAuditions() {
             maxImages={1}
             onChange={(nextImages) => {
               onChange(nextImages);
-              handleChange("posterUrl", nextImages[0] || "");
-              handleChange("imageUrl", nextImages[0] || "");
             }}
             uploadImage={async (file) => {
               const result = await storageAdapter.uploadContentImage(file, { context: 'admin-auditions' });
               return result.imageUrl || result.url || "";
             }}
             onError={(message) => setToast({ open: true, message, type: "error" })}
-            helperText="메인 노출용 대표 이미지 1장만 등록할 수 있습니다."
+            onUploadStateChange={setImageUploading}
+            helperText="메인 노출용 대표 이미지 1장만 등록할 수 있습니다. 업로드 완료 후 저장됩니다."
           />
         ),
       },
@@ -618,8 +620,9 @@ export default function AdminAuditions() {
         fields={formFields}
         initialData={editingItem || { isActive: true }}
         onSubmit={handleSave}
-        onCancel={() => setModalOpen(false)}
+        onCancel={() => { setModalOpen(false); setImageUploading(false); }}
         submitText={editingItem ? "수정" : "추가"}
+        submitDisabled={imageUploading}
         onChange={setCurrentFormData}
       />
 

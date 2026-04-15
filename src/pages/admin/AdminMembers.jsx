@@ -209,11 +209,15 @@ export default function AdminMembers() {
     setMemoValue(user.memo || "");
     setDetailOpen(true);
     setRegionAssignments([]);
+    // 기존 districtId 없고 지역의 city가 있으면 자동 채움
+    const existingDistrictId = user.districtId || user.district_id || '';
+    const userRegion = regions.find(r => r.id === (user.regionId || ''));
+    const autoDistrict = existingDistrictId || String(userRegion?.city || userRegion?.district || '').trim();
     setEditInfo({
       name: user.name || '',
       phone: user.phone || '',
       regionId: user.regionId || '',
-      districtId: user.districtId || user.district_id || '',
+      districtId: autoDistrict,
       address: user.address || '',
       sdMark: (() => {
         const resolved = normalizeSdMarkPayloadValue(user.sdMark) ?? getCachedSdMark(user.memberId || user.id);
@@ -223,7 +227,15 @@ export default function AdminMembers() {
     setEditDistricts([]);
     // 지역이 있으면 구/군 목록 자동 로드
     if (user.regionId) {
-      storageAdapter.getDistricts(user.regionId).then(list => setEditDistricts(list || [])).catch(() => {});
+      storageAdapter.getDistricts(user.regionId).then(list => {
+        const dList = list || [];
+        setEditDistricts(dList);
+        // districts 목록에서 현재 district와 일치하는 항목 자동 매핑
+        if (dList.length > 0 && autoDistrict && !existingDistrictId) {
+          const match = dList.find(d => (d.name || d.district_name) === autoDistrict);
+          if (match) setEditInfo(prev => ({ ...prev, districtId: String(match.id || match.district_id) }));
+        }
+      }).catch(() => {});
     }
     // REGION_ADMIN이면 배정 목록 로드
     if (user.role === 'REGION_ADMIN') {
@@ -754,10 +766,24 @@ export default function AdminMembers() {
                     value={editInfo.regionId}
                     onChange={e => {
                       const rid = e.target.value;
-                      setEditInfo(prev => ({ ...prev, regionId: rid, districtId: '' }));
+                      // 선택된 지역의 city(시/군/구) 값 가져오기 (auto-apply)
+                      const selectedReg = regions.find(r => r.id === rid);
+                      const autoDistrict = String(selectedReg?.city || selectedReg?.district || '').trim();
+                      setEditInfo(prev => ({ ...prev, regionId: rid, districtId: autoDistrict }));
                       setEditDistricts([]);
                       if (rid) {
-                        storageAdapter.getDistricts(rid).then(list => setEditDistricts(list || [])).catch(() => {});
+                        storageAdapter.getDistricts(rid).then(list => {
+                          const dList = list || [];
+                          setEditDistricts(dList);
+                          // districts 목록이 있고 현재 districtId가 region.city로만 설정된 경우
+                          // 드롭다운 목록에서 일치하는 항목 자동 선택
+                          if (dList.length > 0 && autoDistrict) {
+                            const match = dList.find(d => (d.name || d.district_name) === autoDistrict);
+                            if (match) {
+                              setEditInfo(prev => ({ ...prev, districtId: String(match.id || match.district_id) }));
+                            }
+                          }
+                        }).catch(() => {});
                       }
                     }}
                     style={{
@@ -773,8 +799,8 @@ export default function AdminMembers() {
                     ))}
                   </select>
                 </div>
-                {/* 구/군 드롭다운 (선택) */}
-                {editDistricts.length > 0 && (
+                {/* 구/군 표시 (districts 목록이 있으면 드롭다운, 없으면 region.city 자동 표기) */}
+                {editDistricts.length > 0 ? (
                   <div>
                     <label style={{ display: 'block', fontSize: 12, opacity: 0.7, marginBottom: 4 }}>구/군 (선택)</label>
                     <select
@@ -795,7 +821,24 @@ export default function AdminMembers() {
                       ))}
                     </select>
                   </div>
-                )}
+                ) : editInfo.districtId ? (
+                  /* districts 목록 없어도 region.city 값이 있으면 읽기전용 텍스트로 표기 */
+                  <div>
+                    <label style={{ display: 'block', fontSize: 12, opacity: 0.7, marginBottom: 4 }}>구/군</label>
+                    <input
+                      type="text"
+                      value={editInfo.districtId}
+                      onChange={e => setEditInfo(prev => ({ ...prev, districtId: e.target.value }))}
+                      placeholder="시/군/구"
+                      style={{
+                        width: '100%', padding: '8px 12px', borderRadius: 6,
+                        border: '1px solid rgba(255,255,255,0.15)',
+                        background: 'rgba(255,255,255,0.06)', color: '#fff',
+                        fontSize: 13, outline: 'none', boxSizing: 'border-box',
+                      }}
+                    />
+                  </div>
+                ) : null}
                 {/* 상세주소 */}
                 <div>
                   <label style={{ display: 'block', fontSize: 12, opacity: 0.7, marginBottom: 4 }}>상세주소</label>

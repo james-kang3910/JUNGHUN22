@@ -17,7 +17,7 @@
  *   GET  /api/admin/vouchers/balances     잔액 현황 집계 (member|shop)
  * =======================================================
  */
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { isAdminAuthenticatedLocal } from "../../lib/adminAuth";
 import * as storageAdapter from "../../lib/storageAdapter";
@@ -90,6 +90,7 @@ export default function AdminVouchers() {
   const [tblFilterSource, setTblFilterSource] = useState('');
   const [tblFilterType, setTblFilterType] = useState('');
   const [tblFilterName, setTblFilterName] = useState('');
+  const [tblExpandedGroups, setTblExpandedGroups] = useState({});
 
   // ── 잔액 현황 테이블 상태 ──
   const [balTab, setBalTab] = useState('member'); // 'member' | 'shop'
@@ -358,7 +359,30 @@ export default function AdminVouchers() {
     return <span style={{ marginLeft: 3, color: '#6ee7b7' }}>{tblSortDir === 'DESC' ? '↓' : '↑'}</span>;
   };
 
-  const SOURCE_OPTIONS = ['ADMIN', 'ADMIN_DEDUCT', 'MISSION', 'QR', 'SHOP_USE', 'DISTRIBUTE'];
+  const SOURCE_OPTIONS = ['ADMIN', 'ADMIN_CANCEL', 'ADMIN_DEDUCT', 'MISSION', 'QR', 'SHOP_USE', 'DISTRIBUTE'];
+
+  const groupedTblLogs = useMemo(() => {
+    const ordered = [];
+    const groupMap = new Map();
+    (Array.isArray(tblLogs) ? tblLogs : []).forEach((log, index) => {
+      const targetLabel = String(
+        log.targetType === 'shop'
+          ? (log.shopName || log.shopId || log.memberId || '-')
+          : (log.memberName || log.memberId || '-')
+      ).trim() || '-';
+      const targetBucket = String(log.targetType || 'member').toLowerCase();
+      const groupKey = `${targetBucket}::${targetLabel}`;
+      if (!groupMap.has(groupKey)) {
+        const group = { key: groupKey, label: targetLabel, targetType: targetBucket, logs: [], totalAmount: 0, firstIndex: index };
+        groupMap.set(groupKey, group);
+        ordered.push(group);
+      }
+      const group = groupMap.get(groupKey);
+      group.logs.push(log);
+      group.totalAmount += Number(log.amount || 0);
+    });
+    return ordered;
+  }, [tblLogs]);
 
   const panelStyle = { background: 'rgba(255,255,255,0.05)', borderRadius: 16, padding: isMobile ? '14px 12px' : 20, marginBottom: 16, border: '1px solid rgba(255,255,255,0.08)' };
   const inputStyle = { padding: '9px 12px', borderRadius: 8, border: '1px solid rgba(255,255,255,0.2)', background: 'rgba(255,255,255,0.08)', color: '#fff', fontSize: 14, width: '100%', boxSizing: 'border-box' };
@@ -1089,40 +1113,72 @@ export default function AdminVouchers() {
             <tbody>
               {tblLoading ? (
                 <tr><td colSpan={8} style={{ textAlign: 'center', padding: 40, opacity: 0.5 }}>⏳ 조회 중...</td></tr>
-              ) : tblLogs.length === 0 ? (
+              ) : groupedTblLogs.length === 0 ? (
                 <tr><td colSpan={8} style={{ textAlign: 'center', padding: 40, opacity: 0.5 }}>조회 결과가 없습니다.</td></tr>
-              ) : tblLogs.map((log, i) => (
-                <tr key={log.id || i} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', transition: 'background .15s' }}
-                  onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.04)'}
-                  onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
-                >
-                  <td style={{ padding: '9px 10px', whiteSpace: 'nowrap', opacity: 0.7, fontSize: 12 }}>
-                    {log.createdAt ? new Date(log.createdAt).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-'}
-                  </td>
-                  <td style={{ padding: '9px 10px', maxWidth: 160 }}>
-                    {log.targetType === 'shop'
-                      ? <span><span style={{ fontSize: 11, marginRight: 4, padding: '1px 5px', borderRadius: 6, background: 'rgba(251,191,36,0.2)', color: '#fbbf24' }}>🏦</span>{log.shopName || log.shopId || log.memberId}</span>
-                      : <span>{log.memberName || log.memberId}</span>
-                    }
-                  </td>
-                  <td style={{ padding: '9px 10px', whiteSpace: 'nowrap' }}>
-                    <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>{log.typeCode}</span>
-                    {log.typeIsActive === false && <span style={{ marginLeft: 4, fontSize: 10, padding: '1px 5px', borderRadius: 6, background: 'rgba(239,68,68,0.2)', color: '#f87171' }}>삭제됨</span>}
-                  </td>
-                  <td style={{ padding: '9px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
-                    {log.amount > 0
-                      ? <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: 'rgba(110,231,183,0.15)', color: '#6ee7b7' }}>지급</span>
-                      : <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: 'rgba(248,113,113,0.15)', color: '#f87171' }}>차감</span>
-                    }
-                  </td>
-                  <td style={{ padding: '9px 10px', textAlign: 'right', fontWeight: 800, whiteSpace: 'nowrap', color: log.amount > 0 ? '#6ee7b7' : '#f87171' }}>
-                    {log.amount > 0 ? '+' : ''}{log.amount}
-                  </td>
-                  <td style={{ padding: '9px 10px', whiteSpace: 'nowrap', opacity: 0.65, fontSize: 12 }}>{log.source || '-'}</td>
-                  <td style={{ padding: '9px 10px', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.8 }}>{log.description || '-'}</td>
-                  <td style={{ padding: '9px 10px', opacity: 0.45, fontSize: 11, whiteSpace: 'nowrap' }}>{log.adminId || '-'}</td>
-                </tr>
-              ))}
+              ) : groupedTblLogs.map((group) => {
+                const isExpanded = group.logs.length === 1 ? true : !!tblExpandedGroups[group.key];
+                return (
+                  <>
+                    <tr key={`group-${group.key}`} style={{ borderBottom: '1px solid rgba(255,255,255,0.08)', background: 'rgba(255,255,255,0.03)' }}>
+                      <td colSpan={8} style={{ padding: '10px 12px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, flexWrap: 'wrap' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: 13, fontWeight: 800 }}>{group.targetType === 'shop' ? '📁 상점' : '📁 회원'}</span>
+                            <span style={{ fontSize: 13, fontWeight: 800, color: '#fff' }}>{group.label}</span>
+                            <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: 'rgba(59,130,246,0.16)', color: '#93c5fd', fontWeight: 700 }}>{group.logs.length}건</span>
+                            <span style={{ fontSize: 11, padding: '2px 8px', borderRadius: 999, background: group.totalAmount >= 0 ? 'rgba(110,231,183,0.15)' : 'rgba(248,113,113,0.15)', color: group.totalAmount >= 0 ? '#6ee7b7' : '#f87171', fontWeight: 700 }}>
+                              합계 {group.totalAmount > 0 ? '+' : ''}{group.totalAmount}
+                            </span>
+                          </div>
+                          {group.logs.length > 1 ? (
+                            <button
+                              type="button"
+                              onClick={() => setTblExpandedGroups((prev) => ({ ...prev, [group.key]: !prev[group.key] }))}
+                              style={{ ...btnStyle('rgba(255,255,255,0.08)'), padding: '6px 12px', fontSize: 12 }}
+                            >
+                              {isExpanded ? '접기' : '더보기'}
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                    {isExpanded ? group.logs.map((log, i) => (
+                      <tr key={`${group.key}-${log.id || i}`} style={{ borderBottom: '1px solid rgba(255,255,255,0.05)', transition: 'background .15s' }}
+                        onMouseEnter={e => e.currentTarget.style.background = 'rgba(255,255,255,0.04)'}
+                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                      >
+                        <td style={{ padding: '9px 10px', whiteSpace: 'nowrap', opacity: 0.7, fontSize: 12 }}>
+                          {log.createdAt ? new Date(log.createdAt).toLocaleString('ko-KR', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' }) : '-'}
+                        </td>
+                        <td style={{ padding: '9px 10px', maxWidth: 160 }}>
+                          {log.targetType === 'shop'
+                            ? <span><span style={{ fontSize: 11, marginRight: 4, padding: '1px 5px', borderRadius: 6, background: 'rgba(251,191,36,0.2)', color: '#fbbf24' }}>🏦</span>{log.shopName || log.shopId || log.memberId}</span>
+                            : <span>{log.memberName || log.memberId}</span>
+                          }
+                        </td>
+                        <td style={{ padding: '9px 10px', whiteSpace: 'nowrap' }}>
+                          <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 999, background: 'rgba(251,191,36,0.15)', color: '#fbbf24' }}>{log.typeCode}</span>
+                          {log.typeIsActive === false && <span style={{ marginLeft: 4, fontSize: 10, padding: '1px 5px', borderRadius: 6, background: 'rgba(239,68,68,0.2)', color: '#f87171' }}>삭제됨</span>}
+                        </td>
+                        <td style={{ padding: '9px 10px', textAlign: 'center', whiteSpace: 'nowrap' }}>
+                          {String(log.source || '').toUpperCase() === 'ADMIN_CANCEL'
+                            ? <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: 'rgba(245,158,11,0.15)', color: '#fbbf24' }}>취소</span>
+                            : log.amount > 0
+                              ? <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: 'rgba(110,231,183,0.15)', color: '#6ee7b7' }}>지급</span>
+                              : <span style={{ fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 999, background: 'rgba(248,113,113,0.15)', color: '#f87171' }}>차감</span>
+                          }
+                        </td>
+                        <td style={{ padding: '9px 10px', textAlign: 'right', fontWeight: 800, whiteSpace: 'nowrap', color: log.amount > 0 ? '#6ee7b7' : '#f87171' }}>
+                          {log.amount > 0 ? '+' : ''}{log.amount}
+                        </td>
+                        <td style={{ padding: '9px 10px', whiteSpace: 'nowrap', opacity: 0.65, fontSize: 12 }}>{String(log.source || '').toUpperCase() === 'ADMIN_CANCEL' ? '발행 취소' : (log.source || '-')}</td>
+                        <td style={{ padding: '9px 10px', maxWidth: 180, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', opacity: 0.8 }}>{log.description || '-'}</td>
+                        <td style={{ padding: '9px 10px', opacity: 0.45, fontSize: 11, whiteSpace: 'nowrap' }}>{log.adminId || '-'}</td>
+                      </tr>
+                    )) : null}
+                  </>
+                );
+              })}
             </tbody>
           </table>
         </div>

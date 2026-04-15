@@ -142,7 +142,7 @@ export default function RegionShops() {
     }
   }
 
-  useAutoRefresh(() => loadShops({ silent: true }), { enabled: !!regionId, intervalMs: 15000 });
+  useAutoRefresh(() => loadShops({ silent: true }), { enabled: !!regionId, intervalMs: 60000 });
 
   const uniqueShops = useMemo(() => {
     const seen = new Set();

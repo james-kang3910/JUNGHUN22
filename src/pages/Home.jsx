@@ -60,6 +60,63 @@ function isPopupEnabled(item) {
   return normalized === 'true' || normalized === '1' || normalized === 'y' || normalized === 'yes';
 }
 
+function inferNoticeRegionName(item, regionNameMap = {}) {
+  const explicitName = String(item?.regionName || item?.region_name || '').trim();
+  if (explicitName) return explicitName;
+
+  const regionId = String(
+    item?.regionId || item?.region_id || (Array.isArray(item?.regionIds) ? item.regionIds[0] : '') || ''
+  ).trim();
+  if (regionId && regionNameMap[regionId]) return regionNameMap[regionId];
+
+  const text = `${item?.title || ''} ${item?.content || ''} ${item?.body || ''}`.trim();
+  const exactAreaMatch = text.match(/([가-힣]+)\s*지역/);
+  if (exactAreaMatch?.[1]) return exactAreaMatch[1];
+
+  const presetNames = ['울산', '범서', '해운대'];
+  return presetNames.find((name) => text.includes(name)) || '';
+}
+
+function normalizeNoticeRegionLabel(rawValue) {
+  const raw = String(rawValue || '').trim();
+  if (!raw) return '';
+  if (/^(R_|REGION_|notice_|\d+$)/i.test(raw)) return '';
+
+  const presetMap = {
+    ulsan: '울산',
+    beomseo: '범서',
+    haeundae: '해운대',
+  };
+
+  const mapped = presetMap[raw.toLowerCase()] || raw;
+  const cleaned = mapped
+    .replace(/특별자치도|특별자치시|특별시|광역시/g, '')
+    .replace(/시|군|구/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+
+  if (!cleaned) return '';
+  return cleaned.endsWith('지역') ? cleaned : `${cleaned}지역`;
+}
+
+function getNoticeAudienceLabel(item, regionNameMap = {}) {
+  const scope = String(item?.scope || item?.regionScope || 'ALL').trim().toUpperCase();
+  const regionName = inferNoticeRegionName(item, regionNameMap);
+  const regionLabel = normalizeNoticeRegionLabel(regionName);
+  if (scope === 'REGION') {
+    return regionLabel || '지역공지';
+  }
+  return '전체공지';
+}
+
+function resolveNoticeImageUrl(item) {
+  const raw = String(item?.imageUrl || item?.image_url || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw) || raw.startsWith('data:')) return raw;
+  const base = import.meta.env.VITE_API_BASE || '';
+  return `${base}${raw}`;
+}
+
 export default function Home() {
   console.log('[FORENSIC] 🔍 THIS FILE IS USED: src/pages/Home.jsx');
   const navigate = useNavigate();
@@ -172,6 +229,7 @@ export default function Home() {
 
   const [notice, setNotice] = useState(null);
   const [latestNoticeList, setLatestNoticeList] = useState([]);
+  const [noticeRegionNameMap, setNoticeRegionNameMap] = useState({});
 
   const getCurrentNoticeId = useCallback((item) => {
     return String(item?.id || item?.noticeId || item?.notice_id || '').trim();
@@ -211,7 +269,29 @@ export default function Home() {
     loadHomeNotices();
   }, [loadHomeNotices]);
 
-  useAutoRefresh(loadHomeNotices, { intervalMs: 15000 });
+  useAutoRefresh(loadHomeNotices, { intervalMs: 60000 });
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const regions = await storageAdapter.getRegions();
+        const nextMap = Object.fromEntries(
+          (Array.isArray(regions) ? regions : [])
+            .map((region) => {
+              const id = String(region?.id || region?.regionId || region?.region_id || '').trim();
+              const name = String(region?.name || region?.regionName || region?.region_name || '').trim();
+              return [id, name];
+            })
+            .filter(([id, name]) => id && name)
+        );
+        if (mounted) setNoticeRegionNameMap(nextMap);
+      } catch (e) {}
+    })();
+    return () => {
+      mounted = false;
+    };
+  }, []);
 
   useEffect(() => {
     if (!latestNoticeList.length) return;
@@ -368,80 +448,82 @@ export default function Home() {
 
   const [bannerData, setBannerData] = useState([]);
   const [bannerLoading, setBannerLoading] = useState(true);
+  const bannerHydratedRef = useRef(false);
   const [adSlideIndex, setAdSlideIndex] = useState(0);
   const [broadcastPreviewList, setBroadcastPreviewList] = useState([]);
   const [auditionHighlight, setAuditionHighlight] = useState({ latestAudition: null, topSubmission: null });
 
   const loadHomeDynamicContent = useCallback(async () => {
-    setBannerLoading(true);
+    if (!bannerHydratedRef.current) setBannerLoading(true);
     const userRegion = localStorage.getItem('selectedRegionId');
 
     try {
-      const [bannersResult, broadcastsResult, auditionsResult] = await Promise.allSettled([
-        storageAdapter.getBanners(userRegion),
-        getLatestShareBroadcasts(5, { directFirst: true }),
-        storageAdapter.getAuditionHighlights().catch(async () => {
-          const list = await storageAdapter.getAuditions().catch(() => getAuditions());
-          return { latestAudition: Array.isArray(list) && list.length > 0 ? list[0] : null, topSubmission: null };
-        })
-      ]);
-
-      if (bannersResult.status === 'fulfilled') {
-        let API_BASE = import.meta.env.VITE_API_BASE || "";
-        if (!API_BASE && import.meta.env.DEV && typeof window !== 'undefined') {
-          API_BASE = `${window.location.protocol}//${window.location.hostname}:8787`;
+      const bannersResult = await storageAdapter.getBanners(userRegion);
+      let API_BASE = import.meta.env.VITE_API_BASE || "";
+      if (!API_BASE && import.meta.env.DEV && typeof window !== 'undefined') {
+        API_BASE = `${window.location.protocol}//${window.location.hostname}:8787`;
+      }
+      const rawBanners = Array.isArray(bannersResult) ? bannersResult : [];
+      const normalized = rawBanners.map(b => {
+        let imageUrl = b.imageUrl || b.image_url || b.url || null;
+        let videoUrl = b.videoUrl || b.video_url || null;
+        if (!videoUrl && imageUrl && isDirectVideoUrlUtil(imageUrl)) {
+          videoUrl = imageUrl;
+          imageUrl = null;
         }
-        const rawBanners = Array.isArray(bannersResult.value) ? bannersResult.value : [];
-        const normalized = rawBanners.map(b => {
-          let imageUrl = b.imageUrl || null;
-          let videoUrl = b.videoUrl || b.video_url || null;
-          if (imageUrl && !/^https?:\/\//i.test(imageUrl) && !imageUrl.startsWith('data:')) {
-            imageUrl = `${API_BASE}${imageUrl}`;
-          }
-          if (videoUrl && !/^https?:\/\//i.test(videoUrl) && !videoUrl.startsWith('data:')) {
-            videoUrl = `${API_BASE}${videoUrl}`;
-          }
-          return {
-            id: b.id,
-            url: imageUrl || videoUrl,
-            imageUrl,
-            videoUrl,
-            alt: b.alt,
-            linkUrl: b.linkUrl,
-            gradientEnabled: !!b.gradientEnabled,
-            gradientPreset: b.gradientPreset || 'dark',
-            gradientColor1: b.gradientColor1 || null,
-            gradientColor2: b.gradientColor2 || null,
-            gradientStop1: b.gradientStop1 ?? 0,
-            gradientStop2: b.gradientStop2 ?? 100,
-            chipLabel: b.chipLabel || null,
-          };
-        });
-        setBannerData(normalized);
-      } else {
-        setBannerData([]);
-      }
-
-      if (broadcastsResult.status === 'fulfilled') {
-        const list = broadcastsResult.value || [];
-        const normalized = list.map((item) => ({
-          ...item,
-          url: item.mediaUrl || item.videoUrl || item.url,
-        }));
-        setBroadcastPreviewList(normalized);
-      }
-
-      if (auditionsResult.status === 'fulfilled') {
-        setAuditionHighlight({
-          latestAudition: auditionsResult.value?.latestAudition || null,
-          topSubmission: auditionsResult.value?.topSubmission || null,
-        });
-      }
+        if (imageUrl && !/^https?:\/\//i.test(imageUrl) && !imageUrl.startsWith('data:')) {
+          imageUrl = `${API_BASE}${imageUrl}`;
+        }
+        if (videoUrl && !/^https?:\/\//i.test(videoUrl) && !videoUrl.startsWith('data:')) {
+          videoUrl = `${API_BASE}${videoUrl}`;
+        }
+        return {
+          id: b.id,
+          url: imageUrl || videoUrl,
+          imageUrl,
+          videoUrl,
+          alt: b.alt || b.title || '',
+          linkUrl: b.linkUrl || b.link_url || '',
+          gradientEnabled: !!b.gradientEnabled,
+          gradientPreset: b.gradientPreset || 'dark',
+          gradientColor1: b.gradientColor1 || null,
+          gradientColor2: b.gradientColor2 || null,
+          gradientStop1: b.gradientStop1 ?? 0,
+          gradientStop2: b.gradientStop2 ?? 100,
+          chipLabel: b.chipLabel || b.chip_label || null,
+        };
+      });
+      setBannerData(normalized);
+      bannerHydratedRef.current = true;
     } catch (error) {
-      console.error('[Home] Initial data load failed:', error);
+      console.error('[Home] Banner data load failed:', error);
       setBannerData([]);
     } finally {
       setBannerLoading(false);
+    }
+
+    try {
+      const broadcasts = await getLatestShareBroadcasts(5, { directFirst: true });
+      const normalized = (broadcasts || []).map((item) => ({
+        ...item,
+        url: item.mediaUrl || item.videoUrl || item.url,
+      }));
+      setBroadcastPreviewList(normalized);
+    } catch (error) {
+      console.error('[Home] Broadcast preview load failed:', error);
+    }
+
+    try {
+      const highlights = await storageAdapter.getAuditionHighlights().catch(async () => {
+        const list = await storageAdapter.getAuditions().catch(() => getAuditions());
+        return { latestAudition: Array.isArray(list) && list.length > 0 ? list[0] : null, topSubmission: null };
+      });
+      setAuditionHighlight({
+        latestAudition: highlights?.latestAudition || null,
+        topSubmission: highlights?.topSubmission || null,
+      });
+    } catch (error) {
+      console.error('[Home] Audition highlight load failed:', error);
     }
   }, []);
 
@@ -450,10 +532,18 @@ export default function Home() {
     loadHomeDynamicContent();
   }, [loadHomeDynamicContent]);
 
-  useAutoRefresh(loadHomeDynamicContent, { intervalMs: 15000 });
+  useAutoRefresh(loadHomeDynamicContent, { intervalMs: 60000 });
 
   // 표시할 배너 (서버 데이터만 사용 - fallback 더미 이미지 제거)
   const displayBanners = useMemo(() => bannerData, [bannerData]);
+
+  // 배너 개수가 바뀌면 현재 인덱스를 안전 범위로 보정한다.
+  useEffect(() => {
+    setAdSlideIndex((prev) => {
+      if (!displayBanners.length) return 0;
+      return prev >= 0 ? (prev % displayBanners.length) : 0;
+    });
+  }, [displayBanners.length]);
 
   // (Removed) client-side brightness analysis prototype - using centered blur overlay instead
 
@@ -990,7 +1080,7 @@ export default function Home() {
           margin: '0 auto',
           borderRadius: "var(--r-section)",
           overflow: "hidden",
-          background: '#000',
+          background: '#f4f6f8',
         }}
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
@@ -1014,6 +1104,7 @@ export default function Home() {
                 const hasVideo = !!img.videoUrl;
                 const hasImage = !hasVideo && !!img.imageUrl;
                 const hasMedia = hasVideo || hasImage;
+                const mediaBackdropUrl = hasImage ? img.imageUrl : (hasVideo ? (img.imageUrl || null) : null);
                 return (
                 <div
                   key={img.id || idx}
@@ -1024,7 +1115,6 @@ export default function Home() {
                     flexShrink: 0,
                     cursor: img.linkUrl ? "pointer" : "default",
                     overflow: 'hidden',
-                    background: '#000',
                   }}
                   onClick={() => {
                     if (img.linkUrl) {
@@ -1036,6 +1126,28 @@ export default function Home() {
                     }
                   }}
                 >
+                  {mediaBackdropUrl ? (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        inset: 0,
+                        backgroundImage: `url(${mediaBackdropUrl})`,
+                        backgroundSize: 'cover',
+                        backgroundPosition: 'center',
+                        transform: 'scale(1.06)',
+                        filter: 'blur(18px) brightness(0.96)',
+                      }}
+                    />
+                  ) : null}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      inset: 0,
+                      background: mediaBackdropUrl
+                        ? 'linear-gradient(180deg, rgba(255,255,255,0.06) 0%, rgba(255,255,255,0) 26%, rgba(0,0,0,0.10) 100%)'
+                        : '#f3f4f6',
+                    }}
+                  />
                   {hasVideo ? (
                     <video
                       src={img.videoUrl || undefined}
@@ -1046,11 +1158,12 @@ export default function Home() {
                       preload="metadata"
                       poster={img.imageUrl || undefined}
                       style={{
+                        position: 'absolute',
+                        inset: 0,
                         width: '100%',
                         height: '100%',
                         objectFit: 'cover',
                         display: 'block',
-                        background: '#000',
                       }}
                     />
                   ) : hasImage ? (
@@ -1059,10 +1172,13 @@ export default function Home() {
                       alt={img.alt || `광고 ${idx + 1}`}
                       loading="lazy"
                       style={{
-                        width: "100%",
-                        height: "100%",
-                        objectFit: "cover",
+                        position: 'absolute',
+                        inset: 0,
+                        width: '100%',
+                        height: '100%',
+                        objectFit: 'cover',
                         display: 'block',
+                        background: 'transparent',
                       }}
                     />
                   ) : (
@@ -1072,11 +1188,11 @@ export default function Home() {
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'center',
-                      color: 'rgba(255,255,255,0.72)',
+                      color: 'rgba(14,116,144,0.5)',
                       fontSize: 14,
                       fontWeight: 700,
                       letterSpacing: '-0.02em',
-                      background: '#000',
+                      background: '#f3f4f6',
                     }}>
                       배너 준비중
                     </div>
@@ -1156,60 +1272,10 @@ export default function Home() {
                 </div>);
               })}
             </div>
-            {/* Navigation controls */}
+            {/* Dots indicator */}
             {displayBanners.length > 1 && (
               <>
-                <button
-                  aria-label="Previous banner"
-                  onClick={() => setAdSlideIndex((prev) => (prev - 1 + displayBanners.length) % displayBanners.length)}
-                  style={{
-                    position: 'absolute',
-                    left: 8,
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    zIndex: 5,
-                    background: 'rgba(0,0,0,0.4)',
-                    border: 'none',
-                    color: '#fff',
-                    width: 40,
-                    height: 40,
-                    borderRadius: '50%',
-                    padding: 0,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  ‹
-                </button>
-                <button
-                  aria-label="Next banner"
-                  onClick={() => setAdSlideIndex((prev) => (prev + 1) % displayBanners.length)}
-                  style={{
-                    position: 'absolute',
-                    right: 8,
-                    top: '50%',
-                    transform: 'translateY(-50%)',
-                    zIndex: 5,
-                    background: 'rgba(0,0,0,0.4)',
-                    border: 'none',
-                    color: '#fff',
-                    width: 40,
-                    height: 40,
-                    borderRadius: '50%',
-                    padding: 0,
-                    cursor: 'pointer',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                  }}
-                >
-                  ›
-                </button>
-
-                {/* Dots indicator */}
-                <div style={{ position: 'absolute', bottom: 8, left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: 4, zIndex: 6 }}>
+                <div style={{ position: 'absolute', bottom: -4, left: '50%', transform: 'translateX(-50%)', display: 'flex', gap: 4, zIndex: 6 }}>
                   {displayBanners.map((_, i) => (
                     <button
                       key={i}
@@ -1479,9 +1545,16 @@ export default function Home() {
                     marginTop: 4,
                     color: '#6b7280',
                     fontSize: 12,
+                    display: 'flex',
+                    flexWrap: 'wrap',
+                    gap: 6,
+                    alignItems: 'center',
                   }}
                 >
-                  {(item.author || item.writer || '관리자')} · {item.date || ''}
+                  <span style={{ display: 'inline-flex', alignItems: 'center', minHeight: 22, padding: '0 8px', borderRadius: 999, background: 'rgba(14,116,144,0.10)', color: '#0e7490', fontSize: 11, fontWeight: 800 }}>
+                    {getNoticeAudienceLabel(item, noticeRegionNameMap)}
+                  </span>
+                  <span>{(item.author || item.writer || '관리자')} · {item.date || ''}</span>
                 </div>
               </div>
             ))
@@ -1521,35 +1594,37 @@ export default function Home() {
           )}
         </div>
 
-        {/* Notice modal: show full title + full content (pre-wrap) - pv3 UX */}
+        {/* Notice modal: full content + scroll for long messages */}
         {noticeModalOpen && (
-          <div className="su-modal-overlay" onClick={() => closeNoticePopup(true)} role="dialog" aria-modal="true">
+          <div
+            className="su-modal-overlay"
+            onClick={() => closeNoticePopup()}
+            role="dialog"
+            aria-modal="true"
+            style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px 14px' }}
+          >
             <div
               className="su-modal-content"
-              onClick={() => {
-                const targetId = getCurrentNoticeId(notice);
-                setNoticeModalOpen(false);
-                if (targetId) navigate(`/notices/${encodeURIComponent(String(targetId))}`);
-                else navigate('/notices');
-              }}
+              onClick={(e) => e.stopPropagation()}
               style={{
-                maxWidth: 640,
-                width: '94%',
-                maxHeight: '80vh',
+                maxWidth: 420,
+                width: '88%',
+                maxHeight: '64vh',
+                margin: '0 auto',
                 overflow: 'hidden',
                 display: 'flex',
                 flexDirection: 'column',
                 background: 'linear-gradient(180deg, #ffffff, #f8fafc)',
-                border: '1px solid rgba(148,163,184,0.22)',
-                borderRadius: 22,
-                boxShadow: '0 28px 56px rgba(15,23,42,0.20)',
+                border: '1px solid rgba(15,23,42,0.08)',
+                borderRadius: 20,
+                boxShadow: '0 12px 28px rgba(15,23,42,0.12)',
               }}
             >
-              <div style={{ padding: '18px 20px 12px', borderBottom: '1px solid rgba(148,163,184,0.16)' }}>
+              <div style={{ padding: '16px 16px 10px', borderBottom: '1px solid rgba(15,23,42,0.08)' }}>
                 <div style={{ display: 'inline-flex', alignItems: 'center', gap: 6, borderRadius: 999, padding: '4px 10px', background: 'rgba(14,116,144,0.12)', color: '#0e7490', fontSize: 11, fontWeight: 800 }}>
-                  📌 관리자 공지
+                  📌 {getNoticeAudienceLabel(notice, noticeRegionNameMap)}
                 </div>
-                <div style={{ marginTop: 10, fontWeight: 800, fontSize: 22, color: '#0f172a', lineHeight: 1.35 }}>
+                <div style={{ marginTop: 10, fontWeight: 800, fontSize: 18, color: '#0f172a', lineHeight: 1.4 }}>
                   {notice && notice.title ? notice.title : '공지'}
                 </div>
                 <div style={{ marginTop: 6, fontSize: 12, color: '#64748b' }}>
@@ -1558,21 +1633,30 @@ export default function Home() {
                 </div>
               </div>
 
-              <div style={{ padding: '14px 20px 20px', flex: 1, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
-                <div style={{ whiteSpace: 'pre-wrap', fontSize: 14, lineHeight: 1.7, color: '#334155' }}>
+              <div style={{ padding: '10px 14px 12px', flex: 1, minHeight: 0, overflowY: 'auto', WebkitOverflowScrolling: 'touch' }}>
+                {resolveNoticeImageUrl(notice) ? (
+                  <div style={{ marginBottom: 12, borderRadius: 14, overflow: 'hidden', border: '1px solid rgba(15,23,42,0.08)', background: '#e2e8f0' }}>
+                    <img
+                      src={resolveNoticeImageUrl(notice)}
+                      alt={notice?.title || '공지 이미지'}
+                      style={{ display: 'block', width: '100%', maxHeight: 220, objectFit: 'cover' }}
+                    />
+                  </div>
+                ) : null}
+                <div style={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word', overflowWrap: 'anywhere', fontSize: 14, lineHeight: 1.8, color: '#334155' }}>
                   {notice && (notice.content || notice.body) ? (notice.content || notice.body) : '-'}
                 </div>
                 <div style={{ marginTop: 14, fontSize: 12, color: '#0e7490', fontWeight: 700 }}>
-                  팝업을 누르면 공지 상세로 이동합니다.
+                  내용이 길면 아래로 스크롤해서 계속 볼 수 있습니다.
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 10, padding: '12px 16px 14px', borderTop: '1px solid rgba(148,163,184,0.16)', background: 'rgba(248,250,252,0.95)' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8, padding: '8px 14px 10px', borderTop: '1px solid rgba(15,23,42,0.08)', background: 'rgba(248,250,252,0.95)' }}>
                 <button
                   type="button"
                   onClick={(e) => {
                     e.stopPropagation();
-                    closeNoticePopup(true);
+                    closeNoticePopup();
                   }}
                   style={{
                     borderRadius: 12,
@@ -1940,7 +2024,11 @@ export default function Home() {
   {/* Internal lightbox/modal (defensive: avoids depending on external component) */}
   {lightboxOpen ? (
     <div className="su-modal-overlay" onClick={closeLightbox} role="dialog" aria-modal="true">
-      <div className="su-modal-content" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="su-modal-content su-modal-content--lightbox"
+        onClick={(e) => e.stopPropagation()}
+        style={{ width: 'min(720px, 96vw)', maxHeight: 'calc(100vh - 24px)', overflow: 'auto' }}
+      >
         <button type="button" className="su-modal-close" onClick={closeLightbox} aria-label="닫기">✕</button>
         <div className="su-modal-body">
           <div className="su-modal-title" style={{ marginBottom: 8, fontWeight: 800 }}>{lightboxVideo?.title || "영상 보기"}</div>
@@ -1974,7 +2062,17 @@ export default function Home() {
               );
             }
             if (isDirectVideoUrlUtil(url)) {
-              return <video controls autoPlay src={url || undefined} style={{ width: "100%,", borderRadius: 12 }} />;
+              return (
+                <div style={{ width: '100%', maxHeight: '72vh', background: '#000', borderRadius: 12, overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <video
+                    controls
+                    autoPlay
+                    playsInline
+                    src={url || undefined}
+                    style={{ display: 'block', width: '100%', maxWidth: '100%', maxHeight: '72vh', objectFit: 'contain', background: '#000', borderRadius: 12 }}
+                  />
+                </div>
+              );
             }
             return (
               <div style={{ minHeight: 220, borderRadius: 12, background: "linear-gradient(90deg,#1C2130,#141820)", display: "flex", alignItems: "center", justifyContent: "center", color: "rgba(255,255,255,0.35)" }}>미리보기 불가능</div>

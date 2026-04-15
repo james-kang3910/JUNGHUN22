@@ -14,6 +14,14 @@ import { isDirectVideoUrl, parseYouTubeId } from '../lib/videoUtils';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 import { getRegionById } from '../data/regions.seed';
 
+function resolveNoticeImageUrl(imageUrl) {
+  const raw = String(imageUrl || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw) || raw.startsWith('data:')) return raw;
+  const base = import.meta.env.VITE_API_BASE || '';
+  return `${base}${raw}`;
+}
+
 // 날씨 위젯 컴포넌트
 function WeatherWidget({ lat, lon, regionName }) {
   const [weather, setWeather] = useState(null);
@@ -131,7 +139,7 @@ export default function RegionHub() {
   }, [regionId, selectedDistrictId]);
 
   useEffect(() => { loadAll(); }, [loadAll]);
-  useAutoRefresh(() => loadAll({ background: true }), { enabled: !!regionId, intervalMs: 15000 });
+  useAutoRefresh(() => loadAll({ background: true }), { enabled: !!regionId, intervalMs: 60000 });
 
   if (loading) {
     return (
@@ -224,7 +232,9 @@ export default function RegionHub() {
               border: '1px solid var(--c-border, rgba(15,23,42,0.08))',
               overflow: 'hidden', boxShadow: '0 4px 12px rgba(14,116,144,0.06)',
             }}>
-              {notices.map((n, idx) => (
+              {notices.map((n, idx) => {
+                const noticeImageUrl = resolveNoticeImageUrl(n.imageUrl || n.image_url);
+                return (
                 <div
                   key={n.id}
                   onClick={() => navigate(`/r/${regionId}/notices`)}
@@ -235,6 +245,11 @@ export default function RegionHub() {
                     cursor: 'pointer',
                   }}
                 >
+                  {noticeImageUrl ? (
+                    <div style={{ width: '100%', marginBottom: 10, borderRadius: 12, overflow: 'hidden', border: '1px solid rgba(15,23,42,0.08)', background: '#e2e8f0' }}>
+                      <img src={noticeImageUrl} alt={n.title || '공지 이미지'} style={{ display: 'block', width: '100%', maxHeight: 180, objectFit: 'cover' }} />
+                    </div>
+                  ) : null}
                   <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: n.content && n.content.trim() ? 2 : 0 }}>
                     <span style={{ fontSize: 12, fontWeight: 700, color: '#0ea5e9' }}>공지제목</span>
                     <span style={{
@@ -258,7 +273,8 @@ export default function RegionHub() {
                     </div>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </section>

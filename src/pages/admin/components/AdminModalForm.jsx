@@ -91,11 +91,13 @@ export default function AdminModalForm({
 
   if (!open) return null;
 
-  // handleChange에서 onChange 직접 호출 (useEffect 루프 방지)
+  // handleChange에서 최신 state 기준으로 병합 (연속 업데이트 시 값 유실 방지)
   const handleChange = (key, value) => {
-    const next = { ...formData, [key]: value };
-    setFormData(next);
-    onChange?.(next);
+    setFormData((prevData) => {
+      const next = { ...prevData, [key]: value };
+      onChange?.(next);
+      return next;
+    });
   };
 
   const handleSubmit = (e) => {

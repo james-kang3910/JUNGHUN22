@@ -1,13 +1,15 @@
 import { useEffect, useRef } from 'react';
 
-const DEFAULT_EVENTS = ['su:ssot:changed', 'focus'];
+// focus 이벤트 제거: 모바일에서 앱 전환 시 마운트된 모든 컴포넌트가 동시에
+// API 요청을 폭발적으로 발사하는 현상 방지 (가장 큰 체감 느림 원인)
+const DEFAULT_EVENTS = ['su:ssot:changed'];
 
 export default function useAutoRefresh(refreshFn, options = {}) {
   const {
     enabled = true,
-    intervalMs = 15000,
+    intervalMs = 60000,
     events = DEFAULT_EVENTS,
-    minTriggerMs = 1200,
+    minTriggerMs = 3000,
   } = options;
 
   const refreshRef = useRef(refreshFn);

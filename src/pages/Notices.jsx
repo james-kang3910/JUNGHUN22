@@ -7,8 +7,35 @@ console.log('[PAGE]', 'Notices.jsx (active)');
 
 // ────────── 스타일 상수 (제거됨 → CSS 클래스 .su-panel/.su-card/.su-chip 사용) ──────────
 
+function normalizeScope(notice) {
+  return String(notice?.scope || notice?.regionScope || 'ALL').trim().toUpperCase();
+}
+
+function matchesRegionNotice(notice, selectedRegion) {
+  const scope = normalizeScope(notice);
+  if (selectedRegion === '') {
+    return scope === 'ALL';
+  }
+
+  if (scope !== 'REGION') return false;
+  const regionId = String(notice?.regionId || notice?.region_id || '').trim();
+  const regionIds = Array.isArray(notice?.regionIds)
+    ? notice.regionIds.map((v) => String(v || '').trim()).filter(Boolean)
+    : [];
+  return regionId === selectedRegion || regionIds.includes(selectedRegion);
+}
+
+function resolveNoticeImageUrl(imageUrl) {
+  const raw = String(imageUrl || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw) || raw.startsWith('data:')) return raw;
+  const base = import.meta.env.VITE_API_BASE || '';
+  return `${base}${raw}`;
+}
+
 export default function Notices() {
   const navigate = useNavigate();
+  const isMobileView = typeof window !== 'undefined' ? window.innerWidth <= 768 : false;
 
   const [notices, setNotices] = useState([]);
   const [regions, setRegions] = useState([]);
@@ -57,15 +84,7 @@ export default function Notices() {
 
   // 필터링된 공지사항
   const filteredNotices = notices.filter(notice => {
-    // 지역 필터: 빈 문자열이면 전체공지(scope='ALL'), 지역 ID가 있으면 해당 지역공지
-    if (selectedRegion === '') {
-      // 전체공지만 표시
-      if (notice.scope !== 'ALL') return false;
-    } else {
-      // 선택된 지역의 공지만 표시
-      if (notice.scope !== 'REGION') return false;
-      if (notice.regionId !== selectedRegion && !notice.regionIds?.includes(selectedRegion)) return false;
-    }
+    if (!matchesRegionNotice(notice, selectedRegion)) return false;
 
     // 검색어 필터
     if (searchQuery) {
@@ -92,8 +111,8 @@ export default function Notices() {
     return new Date(b.createdAt || 0) - new Date(a.createdAt || 0);
   });
 
-  const handleNoticeClick = (notice) => {
-    navigate(`/notices/${notice.id}`, { state: { notice } });
+  const handleNoticeClick = () => {
+    // 상세 공지 화면 단계 제거: 목록 화면에서 바로 확인
   };
 
   return (
@@ -123,14 +142,14 @@ export default function Notices() {
           <button onClick={() => setFilter('all')} className={`su-chip${filter === 'all' ? ' is-active' : ''}`}>
             전체
             <span style={{ marginLeft: 6, padding: '2px 6px', borderRadius: 999, background: 'var(--c-border)', fontSize: 11 }}>
-              {notices.filter(n => selectedRegion === '' ? n.scope === 'ALL' : (n.scope === 'REGION' && (n.regionId === selectedRegion || n.regionIds?.includes(selectedRegion)))).length}
+              {notices.filter(n => matchesRegionNotice(n, selectedRegion)).length}
             </span>
           </button>
           <button onClick={() => setFilter('important')} className={`su-chip${filter === 'important' ? ' is-active' : ''}`}>
             ⭐ 중요
             <span style={{ marginLeft: 6, padding: '2px 6px', borderRadius: 999, background: 'var(--c-border)', fontSize: 11 }}>
               {notices.filter(n => {
-                const regionMatch = selectedRegion === '' ? n.scope === 'ALL' : (n.scope === 'REGION' && (n.regionId === selectedRegion || n.regionIds?.includes(selectedRegion)));
+                const regionMatch = matchesRegionNotice(n, selectedRegion);
                 return regionMatch && (n.isPinned || n.important);
               }).length}
             </span>
@@ -139,7 +158,7 @@ export default function Notices() {
             일반
             <span style={{ marginLeft: 6, padding: '2px 6px', borderRadius: 999, background: 'var(--c-border)', fontSize: 11 }}>
               {notices.filter(n => {
-                const regionMatch = selectedRegion === '' ? n.scope === 'ALL' : (n.scope === 'REGION' && (n.regionId === selectedRegion || n.regionIds?.includes(selectedRegion)));
+                const regionMatch = matchesRegionNotice(n, selectedRegion);
                 return regionMatch && (!n.isPinned && !n.important);
               }).length}
             </span>
@@ -162,6 +181,14 @@ export default function Notices() {
         </section>
 
         {/* 공지사항 목록 */}
+        {isMobileView && !loading && sortedNotices.some((notice) => String(notice.content || '').trim().length > 90) && (
+          <section className="su-panel" style={{ padding: '10px 14px', marginBottom: 10, background: 'linear-gradient(180deg, #f0f9ff, #ecfeff)', border: '1px solid rgba(14,116,144,0.16)' }}>
+            <div style={{ fontSize: 12, fontWeight: 800, color: '#0e7490', textAlign: 'center', lineHeight: 1.5 }}>
+              <div>⬍ 긴 공지는 카드 안에서</div>
+              <div>위아래로 스크롤해 전체 내용을 볼 수 있습니다.</div>
+            </div>
+          </section>
+        )}
         {loading ? (
           <div className="su-empty">로딩 중...</div>
         ) : sortedNotices.length === 0 ? (
@@ -171,11 +198,20 @@ export default function Notices() {
         ) : (
           <section className="su-panel">
             <div style={{ display: 'grid', gap: 10 }}>
-              {sortedNotices.map((notice) => (
+              {sortedNotices.map((notice) => {
+                const contentText = String(notice.content || '').trim();
+                const hasLongContent = contentText.length > 90;
+                const noticeImageUrl = resolveNoticeImageUrl(notice.imageUrl || notice.image_url);
+                return (
                 <div
                   key={notice.id}
-                  onClick={() => handleNoticeClick(notice)}
                   className="su-card"
+                  style={{
+                    background: '#f8fbff',
+                    padding: hasLongContent ? '16px 16px 18px' : undefined,
+                    minHeight: hasLongContent ? 168 : undefined,
+                    cursor: 'default',
+                  }}
                 >
                   <div style={{ display: 'flex', gap: 8, marginBottom: 6, flexWrap: 'wrap' }}>
                     {notice.isPinned && (
@@ -188,6 +224,12 @@ export default function Notices() {
                       <span className="su-badge su-badge--primary">{notice.category}</span>
                     )}
                   </div>
+
+                  {noticeImageUrl ? (
+                    <div style={{ marginBottom: 10, borderRadius: 12, overflow: 'hidden', border: '1px solid rgba(14,116,144,0.14)', background: '#e2e8f0' }}>
+                      <img src={noticeImageUrl} alt={notice.title || '공지 이미지'} style={{ display: 'block', width: '100%', maxHeight: isMobileView ? 180 : 240, objectFit: 'cover' }} />
+                    </div>
+                  ) : null}
 
                   <div
                     style={{
@@ -208,18 +250,58 @@ export default function Notices() {
                     {notice.title}
                   </div>
 
-                  {notice.content && notice.content.trim() && (
-                    <div style={{
-                      fontSize: 13,
-                      color: 'var(--c-tx-s)',
-                      lineHeight: 1.5,
-                      marginBottom: 8,
-                      wordBreak: 'break-all',
-                      whiteSpace: 'pre-line',
-                      width: '100%',
-                    }}>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: '#0E7490', marginRight: 6 }}>공지내용</span>
-                      {notice.content.length > 120 ? notice.content.slice(0, 120) + '...' : notice.content}
+                  {contentText && (
+                    <div
+                      onClick={(e) => e.stopPropagation()}
+                      style={{
+                        position: 'relative',
+                        marginBottom: 8,
+                      }}
+                    >
+                      <div style={{ fontSize: 11, fontWeight: 700, color: '#0E7490', marginRight: 6, marginBottom: 4 }}>공지내용</div>
+                      <div
+                        style={{
+                          fontSize: 13,
+                          color: 'var(--c-tx-s)',
+                          lineHeight: 1.6,
+                          wordBreak: 'break-all',
+                          whiteSpace: 'pre-line',
+                          width: '100%',
+                          maxHeight: hasLongContent ? (isMobileView ? 170 : 220) : 'none',
+                          minHeight: hasLongContent ? (isMobileView ? 118 : 132) : 'auto',
+                          overflowY: hasLongContent ? (isMobileView ? 'auto' : 'scroll') : 'visible',
+                          padding: hasLongContent ? (isMobileView ? '6px 28px 10px 0' : '8px 12px') : '0',
+                          WebkitOverflowScrolling: 'touch',
+                          borderRadius: hasLongContent ? 12 : 0,
+                          border: hasLongContent ? '1px solid rgba(14,116,144,0.16)' : 'none',
+                          background: hasLongContent ? 'rgba(255,255,255,0.68)' : 'transparent',
+                          scrollbarWidth: 'thin',
+                          scrollbarColor: '#0ea5e9 rgba(14,116,144,0.16)',
+                        }}
+                      >
+                        {contentText}
+                      </div>
+                      {hasLongContent && isMobileView && (
+                        <div
+                          aria-hidden="true"
+                          style={{
+                            pointerEvents: 'none',
+                            position: 'absolute',
+                            top: 26,
+                            right: 4,
+                            bottom: 8,
+                            width: 18,
+                            display: 'flex',
+                            flexDirection: 'column',
+                            alignItems: 'center',
+                            justifyContent: 'space-between',
+                          }}
+                        >
+                          <span style={{ color: '#0ea5e9', fontSize: 11, fontWeight: 900 }}>▲</span>
+                          <span style={{ width: 6, minHeight: 44, borderRadius: 999, background: 'linear-gradient(180deg, rgba(14,165,233,0.28), rgba(14,116,144,0.75), rgba(14,165,233,0.28))' }} />
+                          <span style={{ color: '#0ea5e9', fontSize: 11, fontWeight: 900 }}>▼</span>
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -234,7 +316,8 @@ export default function Notices() {
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </div>
           </section>
         )}

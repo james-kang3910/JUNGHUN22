@@ -39,8 +39,8 @@ function getRewardSummary(participant) {
   const rewardDescription = String(participant.rewardDescription || "").trim();
   if (rewardDescription) return rewardDescription;
   if (rewardType === "points" && rewardAmount > 0) return `${rewardAmount.toLocaleString("ko-KR")}P 지급`;
-  if (rewardType === "vip") return `VIP 상품권 ${Math.max(rewardAmount, 1)}장`;
-  if (rewardType === "voucher") return `보상 상품권 ${Math.max(rewardAmount, 1)}장`;
+  if (rewardType === "vip") return rewardAmount > 0 ? `VIP 상품권 ${rewardAmount.toLocaleString("ko-KR")}원` : "VIP 상품권 금액 미설정";
+  if (rewardType === "voucher") return rewardAmount > 0 ? `보상 상품권 ${rewardAmount.toLocaleString("ko-KR")}원` : "보상 상품권 금액 미설정";
   if (rewardType === "other") return "기타 보상 지급";
   return "";
 }

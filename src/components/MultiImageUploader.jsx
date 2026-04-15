@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 const RAW_API_BASE = import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_URL || "";
 const API_BASE = String(RAW_API_BASE || "").replace(/\/+$/, "").replace(/\/api$/, "");
@@ -55,12 +55,28 @@ export default function MultiImageUploader({
   helperText,
   countText,
   tone = "default",
+  onUploadStateChange,
 }) {
   const inputRef = useRef(null);
   const images = useMemo(() => normalizeImageList(value, maxImages), [value, maxImages]);
   const [isDragging, setIsDragging] = useState(false);
   const [isUploading, setIsUploading] = useState(false);
+  const [tempPreviews, setTempPreviews] = useState([]);
   const isSoftTeal = tone === "soft-teal";
+
+  useEffect(() => {
+    if (typeof onUploadStateChange === 'function') {
+      onUploadStateChange(isUploading);
+    }
+  }, [isUploading, onUploadStateChange]);
+
+  useEffect(() => {
+    return () => {
+      tempPreviews.forEach((url) => {
+        try { URL.revokeObjectURL(url); } catch (e) {}
+      });
+    };
+  }, [tempPreviews]);
 
   const reportError = (message) => {
     if (typeof onError === "function") onError(message);
@@ -97,6 +113,8 @@ export default function MultiImageUploader({
 
     if (validFiles.length === 0) return;
 
+    const nextPreviewUrls = validFiles.map((file) => URL.createObjectURL(file));
+    setTempPreviews(nextPreviewUrls);
     setIsUploading(true);
     try {
       const nextImages = currentImages.slice();
@@ -105,7 +123,15 @@ export default function MultiImageUploader({
         if (uploadedUrl) nextImages.push(uploadedUrl);
       }
       updateImages(nextImages);
+      nextPreviewUrls.forEach((url) => {
+        try { URL.revokeObjectURL(url); } catch (e) {}
+      });
+      setTempPreviews([]);
     } catch (error) {
+      nextPreviewUrls.forEach((url) => {
+        try { URL.revokeObjectURL(url); } catch (e) {}
+      });
+      setTempPreviews([]);
       reportError(error?.message || "이미지 업로드에 실패했습니다.");
     } finally {
       setIsUploading(false);
@@ -192,7 +218,7 @@ export default function MultiImageUploader({
         </div>
       </div>
 
-      {images.length > 0 ? (
+      {(images.length > 0 || tempPreviews.length > 0) ? (
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(110px, 1fr))", gap: 10, marginTop: 12 }}>
           {images.map((imageUrl, index) => (
             <div key={`${imageUrl}-${index}`} style={{ position: "relative", borderRadius: 10, overflow: "hidden", border: "1px solid rgba(255,255,255,0.1)", background: "rgba(255,255,255,0.04)" }}>
@@ -224,6 +250,18 @@ export default function MultiImageUploader({
               >
                 ×
               </button>
+            </div>
+          ))}
+          {tempPreviews.map((previewUrl, index) => (
+            <div key={`temp-${previewUrl}-${index}`} style={{ position: "relative", borderRadius: 10, overflow: "hidden", border: "1px solid rgba(20,184,166,0.4)", background: "rgba(255,255,255,0.04)" }}>
+              <img
+                src={previewUrl}
+                alt={`임시 미리보기 ${index + 1}`}
+                style={{ width: "100%", height: 96, objectFit: "cover", display: "block", opacity: 0.88 }}
+              />
+              <div style={{ position: "absolute", left: 8, bottom: 8, padding: "2px 6px", borderRadius: 999, background: "rgba(20,184,166,0.92)", color: "#fff", fontSize: 11, fontWeight: 700 }}>
+                업로드중
+              </div>
             </div>
           ))}
         </div>

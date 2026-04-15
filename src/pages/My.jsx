@@ -184,6 +184,7 @@ function buildVoucherMetaDescription(reason, meta = {}) {
 
 function getVoucherStatusLabel(source, amount) {
   const normalizedSource = String(source || '').trim().toUpperCase();
+  if (normalizedSource === 'ADMIN_CANCEL') return '취소됨';
   if (normalizedSource === 'MEMBER_TRANSFER_OUT') return '전송됨';
   if (normalizedSource === 'MEMBER_TRANSFER_IN') return '사용가능';
   if (normalizedSource === 'VOUCHER_SHOP_TRANSFER_OUT' || normalizedSource === 'SHOP_USE') return '결제됨';
@@ -193,6 +194,9 @@ function getVoucherStatusLabel(source, amount) {
 
 function getVoucherReason(entry, meta) {
   const normalizedSource = String(entry?.source || '').trim().toUpperCase();
+  if (normalizedSource === 'ADMIN_CANCEL') {
+    return '발행취소';
+  }
   if (normalizedSource === 'MEMBER_TRANSFER_OUT') {
     return meta.toMemberName ? `${meta.toMemberName} 회원 전송` : '회원 전송';
   }
@@ -218,21 +222,31 @@ function getActiveVoucherCards(entries) {
         serial: key,
         balance: 0,
         latestPositive: null,
+        lastEntry: null,
       });
     }
     const bucket = cardMap.get(key);
     bucket.balance += Number(entry.amount || 0);
+
+    const lastEntryTime = bucket.lastEntry?.createdAt ? new Date(bucket.lastEntry.createdAt).getTime() : 0;
+    const entryTime = entry?.createdAt ? new Date(entry.createdAt).getTime() : 0;
+    if (!bucket.lastEntry || entryTime >= lastEntryTime) {
+      bucket.lastEntry = entry;
+    }
+
     if (Number(entry.amount || 0) > 0) {
       const previousTime = bucket.latestPositive?.createdAt ? new Date(bucket.latestPositive.createdAt).getTime() : 0;
-      const nextTime = entry?.createdAt ? new Date(entry.createdAt).getTime() : 0;
-      if (!bucket.latestPositive || nextTime >= previousTime) {
+      if (!bucket.latestPositive || entryTime >= previousTime) {
         bucket.latestPositive = entry;
       }
     }
   });
 
   return Array.from(cardMap.values())
-    .filter((bucket) => bucket.balance > 0 && bucket.latestPositive)
+    .filter((bucket) => {
+      const lastSource = String(bucket.lastEntry?.source || '').trim().toUpperCase();
+      return bucket.balance > 0 && bucket.latestPositive && lastSource !== 'ADMIN_CANCEL';
+    })
     .map((bucket) => ({
       ...bucket.latestPositive,
       cardAmount: bucket.balance,
@@ -1016,6 +1030,7 @@ export default function My() {
   const [selectedVoucherShop, setSelectedVoucherShop] = useState(null);
   const [voucherActionLoading, setVoucherActionLoading] = useState(false);
   const [voucherActionSubmitting, setVoucherActionSubmitting] = useState(false);
+  const [voucherCancellingSerial, setVoucherCancellingSerial] = useState('');
   const [missionParticipations, setMissionParticipations] = useState([]);
   const [participationLoading, setParticipationLoading] = useState(false);
   // 결제 모드: qr(기본) 또는 search(상점검색결제)
@@ -1095,12 +1110,12 @@ export default function My() {
     () => (voucherHistory || []).map((entry, index) => normalizeVoucherHistoryEntry(entry, index)),
     [voucherHistory]
   );
-  const voucherTotalAmount = Number(voucherBalance?.total || 0);
-  const latestPositiveVoucher = normalizedVoucherHistory.find((entry) => entry.amount > 0) || normalizedVoucherHistory[0] || null;
   const activeVoucherCards = useMemo(
     () => getActiveVoucherCards(normalizedVoucherHistory),
     [normalizedVoucherHistory]
   );
+  const voucherTotalAmount = activeVoucherCards.reduce((sum, card) => sum + Math.max(0, Number(card.cardAmount || 0)), 0);
+  const latestPositiveVoucher = normalizedVoucherHistory.find((entry) => entry.amount > 0) || normalizedVoucherHistory[0] || null;
   const visibleVoucherHistory = voucherHistoryExpanded
     ? normalizedVoucherHistory
     : normalizedVoucherHistory.slice(0, 6);
@@ -1297,6 +1312,35 @@ export default function My() {
       setToast({ open: true, message: error?.message || '상품권 처리 중 오류가 발생했습니다.', type: 'error' });
     } finally {
       setVoucherActionSubmitting(false);
+    }
+  };
+
+  const cancelVoucherIssue = async (card) => {
+    if (!card || !currentUserId || !checkIsAdmin()) return;
+
+    const confirmed = window.confirm(`${formatVoucherAmount(card.cardAmount)} 상품권 발행을 취소하시겠습니까?\n취소되면 카드가 사라지고 원장에 취소 기록이 남습니다.`);
+    if (!confirmed) return;
+
+    try {
+      setVoucherCancellingSerial(card.serial);
+      await apiPost('/api/vouchers/issue', {
+        memberId: String(currentUserId),
+        typeCode: String(card.typeCode || 'SHOP_USE'),
+        amount: -Math.abs(Number(card.cardAmount || 0)),
+        description: buildVoucherMetaDescription('발행 취소', { issueRegion: card.issueRegion }),
+        adminId: String(currentUserId),
+        source: 'ADMIN_CANCEL',
+        referenceId: String(card.serial || '').trim(),
+        targetType: 'member',
+      });
+      await loadVoucherData();
+      window.dispatchEvent(new CustomEvent('su:ssot:changed', { detail: { type: 'vouchers', operation: 'issue-cancelled', serial: card.serial } }));
+      setToast({ open: true, message: '상품권 발행이 취소되었습니다.', type: 'success' });
+    } catch (error) {
+      console.error('[My] cancelVoucherIssue failed:', error);
+      setToast({ open: true, message: error?.message || '발행 취소 중 오류가 발생했습니다.', type: 'error' });
+    } finally {
+      setVoucherCancellingSerial('');
     }
   };
 
@@ -2750,6 +2794,44 @@ export default function My() {
 
   const resolveRegionLabel = (profile) => {
     if (!profile || typeof profile !== 'object') return '지역 미설정';
+    let selectedRegionId = '';
+    let selectedRegionName = '';
+    let regionNameCache = {};
+    try {
+      selectedRegionId = String(localStorage.getItem('selectedRegionId') || '').trim();
+    } catch (e) {}
+    try {
+      selectedRegionName = String(localStorage.getItem('selectedRegionName') || '').trim();
+    } catch (e) {}
+    try {
+      const parsed = JSON.parse(localStorage.getItem('su_region_name_cache_v1') || '{}');
+      regionNameCache = parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (e) {}
+
+    const regions = Array.isArray(memberRegions) ? memberRegions : [];
+    const findRegionNameById = (rid) => {
+      const id = String(rid || '').trim();
+      if (!id) return '';
+      const matched = regions.find((region) => {
+        const regionId = String(region?.id || region?.regionId || region?.region_id || '').trim();
+        return regionId === id;
+      });
+      const fromRows = String(matched?.name || matched?.regionName || '').trim();
+      if (fromRows) return fromRows;
+      return String(regionNameCache[id] || '').trim();
+    };
+
+    const profileRegionId = String(profile.regionId || profile.region_id || '').trim();
+
+    // 활동지역은 선택 지역 기준으로 보여주되, ID와 이름이 맞는 경우만 selectedRegionName 사용
+    const selectedRegionLabel = findRegionNameById(selectedRegionId)
+      || (selectedRegionId && profileRegionId && selectedRegionId === profileRegionId ? selectedRegionName : '');
+    if (selectedRegionLabel) return selectedRegionLabel;
+
+    // 선택 지역이 없거나 아직 매핑이 없으면 회원의 regionId를 기준으로 canonical name 표시
+    const profileRegionLabel = findRegionNameById(profileRegionId);
+    if (profileRegionLabel) return profileRegionLabel;
+
     const raw =
       profile.region ||
       profile.regionName ||
@@ -2757,11 +2839,12 @@ export default function My() {
       profile.districtName ||
       profile.regionId ||
       profile.region_id ||
+      selectedRegionId ||
       '';
     const label = String(raw || '').trim();
     if (!label) return '지역 미설정';
 
-    const matched = (Array.isArray(memberRegions) ? memberRegions : []).find((region) => {
+    const matched = regions.find((region) => {
       const regionId = String(region?.id || region?.regionId || region?.region_id || '').trim();
       const regionCode = String(region?.code || region?.regionCode || '').trim();
       const regionName = String(region?.name || region?.regionName || '').trim();
@@ -2770,6 +2853,12 @@ export default function My() {
 
     const matchedName = String(matched?.name || matched?.regionName || '').trim();
     if (matchedName) return matchedName;
+
+    // ID/코드 형태는 그대로 노출하지 않고, 마지막 fallback만 사용
+    if (/^(R_|REGION_|\d+$)/i.test(label)) {
+      if (selectedRegionId && selectedRegionName && (!profileRegionId || selectedRegionId === profileRegionId)) return selectedRegionName;
+      return '지역 미설정';
+    }
     return label;
   };
 
@@ -3559,19 +3648,42 @@ export default function My() {
                             </span>
                             <div style={{ marginTop: 4, fontSize: 12, fontWeight: 700, color: 'rgba(255,245,200,0.78)' }}>지역공유발전플랫폼</div>
                           </div>
-                        <span style={{
-                          fontSize: 12,
-                          fontWeight: 800,
-                          color: '#a3e635',
-                          background: 'rgba(34,197,94,0.22)',
-                          border: '1.2px solid #15803d',
-                          borderRadius: 999,
-                          padding: '3px 14px',
-                          boxShadow: '0 1px 4px 0 rgba(34,197,94,0.10)',
-                          letterSpacing: '0.01em',
-                          marginLeft: 8,
-                          display: 'inline-block',
-                        }}>사용가능</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginLeft: 8 }}>
+                          {checkIsAdmin() ? (
+                            <button
+                              type="button"
+                              className="su-chip"
+                              onClick={() => cancelVoucherIssue(card)}
+                              disabled={voucherCancellingSerial === card.serial}
+                              style={{
+                                borderRadius: 999,
+                                border: '1.2px solid rgba(248,113,113,0.7)',
+                                background: 'rgba(127,29,29,0.35)',
+                                color: '#fecaca',
+                                fontWeight: 800,
+                                fontSize: 11,
+                                padding: '3px 10px',
+                                minHeight: 28,
+                                whiteSpace: 'nowrap',
+                                opacity: voucherCancellingSerial === card.serial ? 0.6 : 1,
+                              }}
+                            >
+                              {voucherCancellingSerial === card.serial ? '취소중' : '발행취소'}
+                            </button>
+                          ) : null}
+                          <span style={{
+                            fontSize: 12,
+                            fontWeight: 800,
+                            color: '#a3e635',
+                            background: 'rgba(34,197,94,0.22)',
+                            border: '1.2px solid #15803d',
+                            borderRadius: 999,
+                            padding: '3px 14px',
+                            boxShadow: '0 1px 4px 0 rgba(34,197,94,0.10)',
+                            letterSpacing: '0.01em',
+                            display: 'inline-block',
+                          }}>사용가능</span>
+                        </div>
                       </div>
                       {/* 금액 강조 */}
                       <div style={{
@@ -3748,9 +3860,10 @@ export default function My() {
                     {visibleVoucherHistory.map((v, idx) => {
                       const isPositive = v.amount > 0;
                       const reason = v.reason || '';
-                      const badgeLabel = isPositive ? 'VIP 지급' : (reason.includes('결제') ? '상점 결제' : reason.includes('전송') ? '회원 전송' : '상품권');
-                      const badgeBg = isPositive ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.10)';
-                      const badgeColor = isPositive ? '#059669' : '#dc2626';
+                      const isCancelled = v.statusLabel === '취소됨' || reason.includes('취소');
+                      const badgeLabel = isCancelled ? '발행 취소' : (isPositive ? 'VIP 지급' : (reason.includes('결제') ? '상점 결제' : reason.includes('전송') ? '회원 전송' : '상품권'));
+                      const badgeBg = isCancelled ? 'rgba(148,163,184,0.14)' : (isPositive ? 'rgba(16,185,129,0.12)' : 'rgba(239,68,68,0.10)');
+                      const badgeColor = isCancelled ? '#475569' : (isPositive ? '#059669' : '#dc2626');
                       return (
                         <div key={v.id || v.serial || `voucher-hist-${idx}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 12, borderRadius: 16, border: '1px solid rgba(226,232,240,0.95)', background: 'rgba(255,255,255,0.92)', padding: '12px 14px' }}>
                           <div style={{ minWidth: 0, flex: 1 }}>

@@ -1,5 +1,5 @@
 import { Routes, Route, Navigate, useLocation, useNavigate, useParams } from "react-router-dom";
-import { useEffect, useLayoutEffect, useState, useRef, lazy, Suspense } from "react";
+import { useEffect, useLayoutEffect, useState, useRef, useMemo, lazy, Suspense } from "react";
 import { createPortal } from "react-dom";
 import { isAdminAuthenticatedLocal } from "./lib/adminAuth";
 import { ensureMemberProfile } from "./lib/memberStore";
@@ -56,7 +56,6 @@ import RegionFestivals from "./pages/RegionFestivals";
 import RegionChatRooms from "./pages/RegionChatRooms";
 import PostDetail from "./pages/PostDetail";
 import Notices from "./pages/Notices";
-import NoticeDetail from "./pages/NoticeDetail";
 import Missions from "./pages/Missions";
 import Support from "./pages/Support";
 import Card from "./pages/Card";
@@ -1484,6 +1483,7 @@ const appNeonHomeStyles = `
 function AppBottomNav({ isLoggedIn, authReady, onLogout }) {
   const navigate = useNavigate();
   const location = useLocation();
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [bottomBanner, setBottomBanner] = useState(null);
   const [bannerClosed, setBannerClosed] = useState(() => {
     try {
@@ -1552,19 +1552,7 @@ function AppBottomNav({ isLoggedIn, authReady, onLogout }) {
           navigate("/auth");
           return;
         }
-        const confirmed = window.confirm("정말 로그아웃하시겠습니까?");
-        if (!confirmed) return;
-        try {
-          await signOut();
-        } catch (e) {
-          console.error("[AppBottomNav] Logout error:", e);
-        }
-        try {
-          onLogout?.();
-        } catch (e) {
-          // noop
-        }
-        navigate("/home");
+        setShowLogoutConfirm(true);
       },
     },
     {
@@ -1632,16 +1620,110 @@ function AppBottomNav({ isLoggedIn, authReady, onLogout }) {
     bottom: "calc(env(safe-area-inset-bottom, 0px) + 66px)",
     width: "min(calc(100vw - 20px), 438px)",
     zIndex: 9998,
-    background: "rgba(255,255,255,0.92)",
-    border: "1px solid rgba(226,232,240,0.92)",
-    borderRadius: 16,
+    background: "transparent",
+    border: "none",
+    borderRadius: 0,
     display: "flex",
     alignItems: "center",
     gap: 8,
-    padding: "6px 10px",
-    boxShadow: "0 8px 24px rgba(15,23,42,0.08)",
-    backdropFilter: "blur(12px)",
-    WebkitBackdropFilter: "blur(12px)",
+    padding: 0,
+    boxShadow: "none",
+  };
+
+  const handleLogoutConfirm = async () => {
+    setShowLogoutConfirm(false);
+    try {
+      await signOut();
+    } catch (e) {
+      console.error("[AppBottomNav] Logout error:", e);
+    }
+    try {
+      onLogout?.();
+    } catch (e) {
+      // noop
+    }
+    navigate("/home");
+  };
+
+  const logoutOverlayStyle = {
+    position: "fixed",
+    inset: 0,
+    zIndex: 10000,
+    background: "rgba(7, 15, 23, 0.48)",
+    backdropFilter: "blur(6px)",
+    WebkitBackdropFilter: "blur(6px)",
+  };
+
+  const logoutModalStyle = {
+    position: "fixed",
+    left: "50%",
+    top: "50%",
+    transform: "translate(-50%, -50%)",
+    width: "min(calc(100vw - 28px), 380px)",
+    zIndex: 10001,
+    borderRadius: 24,
+    padding: "22px 20px 18px",
+    background: "linear-gradient(180deg, rgba(255,255,255,0.98) 0%, rgba(240,249,255,0.97) 100%)",
+    border: "1px solid rgba(14,116,144,0.16)",
+    boxShadow: "0 20px 50px rgba(15,23,42,0.18)",
+    boxSizing: "border-box",
+  };
+
+  const logoutBadgeStyle = {
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 44,
+    height: 44,
+    borderRadius: 14,
+    background: "linear-gradient(135deg, rgba(14,116,144,0.14), rgba(34,211,238,0.22))",
+    color: "#0e7490",
+    fontSize: 20,
+    marginBottom: 12,
+  };
+
+  const logoutTitleStyle = {
+    fontSize: 20,
+    fontWeight: 800,
+    color: "#0f172a",
+    letterSpacing: "-0.03em",
+    marginBottom: 8,
+  };
+
+  const logoutTextStyle = {
+    fontSize: 14,
+    lineHeight: 1.6,
+    color: "#475569",
+    marginBottom: 18,
+  };
+
+  const logoutButtonRowStyle = {
+    display: "grid",
+    gridTemplateColumns: "1fr 1fr",
+    gap: 10,
+  };
+
+  const logoutCancelButtonStyle = {
+    height: 46,
+    borderRadius: 14,
+    border: "1px solid rgba(148,163,184,0.28)",
+    background: "rgba(255,255,255,0.92)",
+    color: "#475569",
+    fontSize: 14,
+    fontWeight: 700,
+    cursor: "pointer",
+  };
+
+  const logoutConfirmButtonStyle = {
+    height: 46,
+    borderRadius: 14,
+    border: "1px solid rgba(14,116,144,0.18)",
+    background: "linear-gradient(135deg, #0e7490 0%, #155e75 100%)",
+    color: "#ffffff",
+    fontSize: 14,
+    fontWeight: 800,
+    boxShadow: "0 8px 18px rgba(14,116,144,0.24)",
+    cursor: "pointer",
   };
 
   return (
@@ -1773,6 +1855,23 @@ function AppBottomNav({ isLoggedIn, authReady, onLogout }) {
           })}
         </nav>
       </div>
+      {showLogoutConfirm ? createPortal(
+        <>
+          <div style={logoutOverlayStyle} onClick={() => setShowLogoutConfirm(false)} aria-hidden="true" />
+          <div role="dialog" aria-modal="true" aria-labelledby="logout-modal-title" style={logoutModalStyle}>
+            <div style={{ textAlign: "center" }}>
+              <div style={logoutBadgeStyle}>↗</div>
+              <div id="logout-modal-title" style={logoutTitleStyle}>로그아웃</div>
+              <div style={logoutTextStyle}>현재 계정에서 로그아웃하시겠습니까?<br />언제든 다시 로그인할 수 있습니다.</div>
+            </div>
+            <div style={logoutButtonRowStyle}>
+              <button type="button" onClick={() => setShowLogoutConfirm(false)} style={logoutCancelButtonStyle}>취소</button>
+              <button type="button" onClick={handleLogoutConfirm} style={logoutConfirmButtonStyle}>로그아웃</button>
+            </div>
+          </div>
+        </>,
+        document.body
+      ) : null}
     </>
   );
 }
@@ -4517,6 +4616,7 @@ function normalizeVoucherSerial(referenceId, createdAt, ledgerId) {
 
 function getVoucherDirection(log) {
   const source = String(log.source || "").toUpperCase();
+  if (source === "ADMIN_CANCEL") return "발행취소";
   if (source === "VOUCHER_SHOP_TRANSFER_IN") return "사용완료";
   if (source === "MEMBER_TRANSFER_IN") return "양수";
   if (source === "MEMBER_TRANSFER_OUT") return "양도";
@@ -4527,6 +4627,7 @@ function getVoucherDirection(log) {
 
 function getVoucherStatusLabel(log) {
   const source = String(log.source || "").toUpperCase();
+  if (source === "ADMIN_CANCEL") return "취소됨";
   if (source === "VOUCHER_SHOP_TRANSFER_IN") return "사용완료";
   if (source === "SHOP_USE" || source === "VOUCHER_SHOP_TRANSFER_OUT") return "사용완료";
   if (source === "MEMBER_TRANSFER_OUT") return "양도완료";
@@ -4548,6 +4649,13 @@ function getVoucherStatusStyle(statusLabel) {
       color: "#fca5a5",
       background: "rgba(239, 68, 68, 0.14)",
       borderColor: "rgba(248, 113, 113, 0.28)",
+    };
+  }
+  if (statusLabel === "취소됨") {
+    return {
+      color: "#fde68a",
+      background: "rgba(245, 158, 11, 0.14)",
+      borderColor: "rgba(245, 158, 11, 0.3)",
     };
   }
   return {
@@ -4606,6 +4714,8 @@ function VipAdminVouchersPage() {
     direction: "",
     status: "",
   });
+  const [ledgerExpandedGroups, setLedgerExpandedGroups] = useState({});
+  const [voucherCancellingSerial, setVoucherCancellingSerial] = useState("");
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
@@ -4713,12 +4823,42 @@ function VipAdminVouchersPage() {
     }
     return acc;
   }, { totalIssued: 0, totalDeducted: 0, totalIssuedCount: 0 });
-  const currentBalance = balanceRows.reduce((sum, row) => sum + (Number(row.total) || 0), 0);
 
-  const memberIssueCounts = normalizedLogs.reduce((acc, log) => {
-    if (log.amount > 0) acc[log.memberId] = (acc[log.memberId] || 0) + 1;
+  const serialBucketMap = normalizedLogs.reduce((acc, log) => {
+    const memberId = String(log.memberId || "").trim();
+    const serial = String(log.serial || "").trim();
+    const targetType = String(log.targetType || "member").toLowerCase();
+    if (!memberId || !serial || targetType === "shop") return acc;
+
+    const bucketKey = `${memberId}::${serial}`;
+    if (!acc[bucketKey]) {
+      acc[bucketKey] = {
+        memberId,
+        net: 0,
+        lastSource: "",
+        lastCreatedAt: "",
+      };
+    }
+    acc[bucketKey].net += Number(log.amount || 0);
+    const logTime = log.createdAt ? new Date(log.createdAt).getTime() : 0;
+    const bucketTime = acc[bucketKey].lastCreatedAt ? new Date(acc[bucketKey].lastCreatedAt).getTime() : 0;
+    if (!acc[bucketKey].lastCreatedAt || logTime >= bucketTime) {
+      acc[bucketKey].lastCreatedAt = log.createdAt;
+      acc[bucketKey].lastSource = String(log.source || "").toUpperCase();
+    }
     return acc;
   }, {});
+
+  const memberIssueCounts = {};
+  const memberActiveBalances = {};
+  Object.values(serialBucketMap).forEach((bucket) => {
+    const isActiveCard = Number(bucket.net || 0) > 0 && String(bucket.lastSource || "") !== "ADMIN_CANCEL";
+    if (!isActiveCard) return;
+    memberIssueCounts[bucket.memberId] = (memberIssueCounts[bucket.memberId] || 0) + 1;
+    memberActiveBalances[bucket.memberId] = (memberActiveBalances[bucket.memberId] || 0) + Number(bucket.net || 0);
+  });
+
+  const currentBalance = Object.values(memberActiveBalances).reduce((sum, amount) => sum + (Number(amount) || 0), 0);
   const memberRecentChange = normalizedLogs.reduce((acc, log) => {
     if (!acc[log.memberId]) acc[log.memberId] = log.createdAt;
     return acc;
@@ -4728,13 +4868,14 @@ function VipAdminVouchersPage() {
     { label: "총 발행 금액", value: formatVoucherAmount(summary.totalIssued) },
     { label: "총 차감 금액", value: formatVoucherAmount(summary.totalDeducted) },
     { label: "현재 잔액", value: formatVoucherAmount(currentBalance) },
-    { label: "총 발행 장수", value: `${summary.totalIssuedCount.toLocaleString("ko-KR")}장` },
+    { label: "총 지급 건수", value: `${summary.totalIssuedCount.toLocaleString("ko-KR")}건` },
   ];
 
   const visibleBalanceRows = balanceRows
     .map((row) => ({
       ...row,
-      issuedCount: memberIssueCounts[row.id] || 0,
+      total: memberActiveBalances[String(row.id)] || 0,
+      issuedCount: memberIssueCounts[String(row.id)] || 0,
       lastChangedAt: memberRecentChange[row.id] || null,
     }))
     .filter((row) => {
@@ -4750,7 +4891,7 @@ function VipAdminVouchersPage() {
     if (filters.to && createdAt && createdAt > new Date(`${filters.to}T23:59:59`)) return false;
     if (filters.member.trim()) {
       const query = filters.member.trim().toLowerCase();
-      const targetText = `${log.memberName || ""} ${log.memberId || ""}`.toLowerCase();
+      const targetText = `${log.memberName || ""} ${log.memberId || ""} ${log.shopName || ""} ${log.shopId || ""}`.toLowerCase();
       if (!targetText.includes(query)) return false;
     }
     if (filters.direction && log.direction !== filters.direction) return false;
@@ -4758,21 +4899,57 @@ function VipAdminVouchersPage() {
     return true;
   });
 
+  const groupedLedgerLogs = useMemo(() => {
+    const ordered = [];
+    const groupMap = new Map();
+    filteredLogs.forEach((log, index) => {
+      const targetLabel = String(
+        String(log.targetType || "") === "shop"
+          ? (log.shopName || log.descShopName || log.shopId || log.memberId || "-")
+          : (log.memberName || log.memberId || "-")
+      ).trim() || "-";
+      const bucket = String(log.targetType || "member").toLowerCase();
+      const groupKey = `${bucket}::${targetLabel}`;
+      if (!groupMap.has(groupKey)) {
+        const group = { key: groupKey, label: targetLabel, targetType: bucket, logs: [], totalAmount: 0, firstIndex: index };
+        groupMap.set(groupKey, group);
+        ordered.push(group);
+      }
+      const group = groupMap.get(groupKey);
+      group.logs.push(log);
+      group.totalAmount += Number(log.amount || 0);
+    });
+    return ordered;
+  }, [filteredLogs]);
+
   // 관리자 발급 원본 카드만 표시 (상점 수신/전송 row 제외)
   const ISSUED_SOURCES = new Set(["ADMIN", "ADMIN_ISSUE", "ISSUE", "GRANT", "ADMIN_GRANT"]);
-  // serial별 순잔액 (= 원본+차감 합산) 계산 → 0 이하 = 사용완료
+  // serial별 순잔액 (= 원본+차감 합산) 계산 → 0 이하 = 사용완료/취소됨
   const serialNetMap = {};
+  const serialLastSourceMap = {};
   normalizedLogs.forEach((log) => {
     const key = log.serial;
     serialNetMap[key] = (serialNetMap[key] || 0) + (Number(log.amount) || 0);
+    if (!serialLastSourceMap[key]) {
+      serialLastSourceMap[key] = String(log.source || "").toUpperCase();
+    }
   });
+  const selectedMemberId = String(issueForm.memberId || "").trim();
   const recentVoucherCards = normalizedLogs
     .filter((log) => log.amount > 0 && ISSUED_SOURCES.has(String(log.source || "").toUpperCase()))
-    .slice(0, 6)
-    .map((log) => ({
-      ...log,
-      statusLabel: (serialNetMap[log.serial] || 0) <= 0 ? "사용완료" : "사용가능",
-    }));
+    .filter((log) => !selectedMemberId || String(log.memberId || "").trim() === selectedMemberId)
+    .map((log) => {
+      const lastSource = serialLastSourceMap[log.serial] || "";
+      const isCancelled = lastSource === "ADMIN_CANCEL";
+      const netAmount = serialNetMap[log.serial] || 0;
+      return {
+        ...log,
+        statusLabel: isCancelled ? "취소됨" : netAmount <= 0 ? "사용완료" : "사용가능",
+        isActiveCard: !isCancelled && netAmount > 0,
+      };
+    })
+    .filter((log) => log.isActiveCard)
+    .slice(0, 6);
   const previewSerial = buildVoucherPreviewSerial();
 
   const panelStyle = {
@@ -4819,6 +4996,10 @@ function VipAdminVouchersPage() {
       setToast("지급할 회원을 선택하세요.");
       return;
     }
+    if (issueMode === "발행취소") {
+      setToast("아래 카드 목록에서 발행취소를 눌러 주세요.");
+      return;
+    }
     if (!amountValue || amountValue <= 0) {
       setToast("금액을 입력하세요.");
       return;
@@ -4836,21 +5017,57 @@ function VipAdminVouchersPage() {
         body: JSON.stringify({
           memberId: issueForm.memberId,
           typeCode: VIP_VOUCHER_TYPE,
-          amount: issueMode === "차감" ? -Math.abs(amountValue) : Math.abs(amountValue),
-          source: issueMode === "차감" ? "ADMIN_DEDUCT" : "ADMIN",
+          amount: Math.abs(amountValue),
+          source: "ADMIN",
           referenceId: serial,
           description: buildVoucherDescription(issueForm.description, issueForm.issueRegion),
           targetType: "member",
         }),
       });
       await reloadVoucherData();
-      setToast(issueMode === "차감" ? "VIP 상품권 차감 완료" : "VIP 상품권 지급 완료");
+      setToast("VIP 상품권 지급 완료");
       setIssueForm({ memberId: "", memberName: "", amount: "", issueRegion: "", description: "" });
       setMemberSearch("");
     } catch (error) {
       setToast(error.message || "상품권 처리에 실패했습니다.");
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  const handleCancelIssuedVoucher = async (log) => {
+    if (!log?.serial || !log?.memberId) {
+      setToast("취소할 상품권 정보를 찾을 수 없습니다.");
+      return;
+    }
+    const cancelAmount = Math.abs(Number(log.amountAbs || log.amount || 0));
+    if (!(cancelAmount > 0)) {
+      setToast("취소 금액을 확인할 수 없습니다.");
+      return;
+    }
+    const confirmed = window.confirm(`${formatVoucherAmount(cancelAmount)} 상품권 발행을 취소하시겠습니까?\n취소되면 사용가능 카드에서 바로 사라집니다.`);
+    if (!confirmed) return;
+
+    try {
+      setVoucherCancellingSerial(log.serial);
+      await apiJson("/api/vouchers/issue", {
+        method: "POST",
+        body: JSON.stringify({
+          memberId: String(log.memberId),
+          typeCode: String(log.typeCode || VIP_VOUCHER_TYPE),
+          amount: -cancelAmount,
+          source: "ADMIN_CANCEL",
+          referenceId: String(log.serial),
+          description: buildVoucherDescription("발행 취소", log.issueRegion),
+          targetType: "member",
+        }),
+      });
+      await reloadVoucherData();
+      setToast("상품권 발행이 취소되었습니다.");
+    } catch (error) {
+      setToast(error.message || "발행 취소 중 오류가 발생했습니다.");
+    } finally {
+      setVoucherCancellingSerial("");
     }
   };
 
@@ -4881,10 +5098,10 @@ function VipAdminVouchersPage() {
       <div style={{ ...panelStyle, display: "grid", gridTemplateColumns: isMobile ? "1fr" : "minmax(0, 1.05fr) minmax(320px, 0.95fr)", gap: 18 }}>
         <div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 14 }}>
-            <div style={{ fontSize: 17, fontWeight: 800 }}>상품권 지급 / 차감</div>
+            <div style={{ fontSize: 17, fontWeight: 800 }}>상품권 지급 / 발행취소</div>
             <div style={{ display: "inline-flex", borderRadius: 999, padding: 4, background: "rgba(255,255,255,0.06)", border: "1px solid rgba(255,255,255,0.08)" }}>
               <button type="button" onClick={() => setIssueMode("지급")} style={{ ...buttonStyle(issueMode === "지급" ? "linear-gradient(90deg,#f0b90b,#f8d978)" : "transparent", issueMode === "지급" ? "#111827" : "rgba(255,255,255,0.7)"), padding: "8px 14px", borderRadius: 999 }}>지급</button>
-              <button type="button" onClick={() => setIssueMode("차감")} style={{ ...buttonStyle(issueMode === "차감" ? "rgba(239,68,68,0.92)" : "transparent", "#fff"), padding: "8px 14px", borderRadius: 999 }}>차감</button>
+              <button type="button" onClick={() => setIssueMode("발행취소")} style={{ ...buttonStyle(issueMode === "발행취소" ? "rgba(239,68,68,0.92)" : "transparent", "#fff"), padding: "8px 14px", borderRadius: 999 }}>발행취소</button>
             </div>
           </div>
 
@@ -4930,21 +5147,28 @@ function VipAdminVouchersPage() {
             </div>
 
             <div>
-              <label style={labelStyle}>금액</label>
+              <label style={labelStyle}>{issueMode === "발행취소" ? "선택 안내" : "금액"}</label>
               <input
-                style={inputStyle}
+                style={{ ...inputStyle, opacity: issueMode === "발행취소" ? 0.65 : 1 }}
                 inputMode="numeric"
-                placeholder="10000"
-                value={issueForm.amount ? Number(issueForm.amount).toLocaleString("ko-KR") : ""}
+                placeholder={issueMode === "발행취소" ? "아래 카드에서 발행취소를 누르세요" : "10000"}
+                value={issueMode === "발행취소" ? "" : issueForm.amount ? Number(issueForm.amount).toLocaleString("ko-KR") : ""}
+                disabled={issueMode === "발행취소"}
                 onChange={(event) => setIssueForm((prev) => ({ ...prev, amount: sanitizeAmount(event.target.value) }))}
               />
-              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
-                {[10000, 30000, 50000, 100000].map((value) => (
-                  <button key={value} type="button" onClick={() => setIssueForm((prev) => ({ ...prev, amount: String(value) }))} style={{ ...buttonStyle("rgba(255,255,255,0.08)"), padding: "8px 12px", fontSize: 13 }}>
-                    {value === 10000 ? "1만원" : value === 30000 ? "3만원" : value === 50000 ? "5만원" : "10만원"}
-                  </button>
-                ))}
-              </div>
+              {issueMode === "발행취소" ? (
+                <div style={{ marginTop: 10, borderRadius: 12, padding: "10px 12px", background: "rgba(239,68,68,0.12)", border: "1px solid rgba(248,113,113,0.2)", fontSize: 12, color: "#fecaca" }}>
+                  검색한 회원의 사용가능 상품권 카드에서 발행취소를 누르면 즉시 회수되고 카드가 사라집니다.
+                </div>
+              ) : (
+                <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 10 }}>
+                  {[10000, 30000, 50000, 100000].map((value) => (
+                    <button key={value} type="button" onClick={() => setIssueForm((prev) => ({ ...prev, amount: String(value) }))} style={{ ...buttonStyle("rgba(255,255,255,0.08)"), padding: "8px 12px", fontSize: 13 }}>
+                      {value === 10000 ? "1만원" : value === 30000 ? "3만원" : value === 50000 ? "5만원" : "10만원"}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             <div>
@@ -4961,7 +5185,7 @@ function VipAdminVouchersPage() {
               <label style={labelStyle}>사유</label>
               <input
                 style={inputStyle}
-                placeholder={issueMode === "차감" ? "차감 사유" : "지급 사유"}
+                placeholder={issueMode === "발행취소" ? "발행 취소 사유" : "지급 사유"}
                 value={issueForm.description}
                 onChange={(event) => setIssueForm((prev) => ({ ...prev, description: event.target.value }))}
               />
@@ -4969,12 +5193,12 @@ function VipAdminVouchersPage() {
 
             {selectedMemberBalance ? (
               <div style={{ borderRadius: 14, padding: "12px 14px", background: "rgba(255,255,255,0.05)", border: "1px solid rgba(255,255,255,0.08)", fontSize: 13, color: "rgba(255,255,255,0.8)" }}>
-                현재 보유 금액 {formatVoucherAmount(selectedMemberBalance.total)} · 발행 장수 {memberIssueCounts[selectedMemberBalance.id] || 0}장
+                현재 보유 금액 {formatVoucherAmount(memberActiveBalances[String(selectedMemberBalance.id)] || 0)} · 보유 장수 {memberIssueCounts[String(selectedMemberBalance.id)] || 0}장
               </div>
             ) : null}
 
-            <button type="button" disabled={submitting} onClick={handleIssue} style={{ ...buttonStyle(issueMode === "차감" ? "rgba(239,68,68,0.92)" : "linear-gradient(90deg,#f0b90b,#f8d978)", issueMode === "차감" ? "#fff" : "#111827"), opacity: submitting ? 0.55 : 1 }}>
-              {submitting ? "처리 중..." : issueMode === "차감" ? "VIP 상품권 차감하기" : "VIP 상품권 지급하기"}
+            <button type="button" disabled={submitting} onClick={handleIssue} style={{ ...buttonStyle(issueMode === "발행취소" ? "rgba(239,68,68,0.92)" : "linear-gradient(90deg,#f0b90b,#f8d978)", issueMode === "발행취소" ? "#fff" : "#111827"), opacity: submitting ? 0.55 : 1 }}>
+              {submitting ? "처리 중..." : issueMode === "발행취소" ? "아래 카드에서 발행취소" : "VIP 상품권 지급하기"}
             </button>
           </div>
         </div>
@@ -4988,8 +5212,8 @@ function VipAdminVouchersPage() {
                 <div style={{ fontSize: 14, color: "#f8d978", fontWeight: 800 }}>🎟️ VIP 상품권</div>
                 <div style={{ marginTop: 6, fontSize: 13, color: "rgba(255,255,255,0.72)" }}>지역공유발전플랫폼</div>
               </div>
-              <div style={{ borderRadius: 999, padding: "6px 10px", background: issueMode === "차감" ? "rgba(239,68,68,0.18)" : "rgba(16,185,129,0.18)", border: `1px solid ${issueMode === "차감" ? "rgba(239,68,68,0.35)" : "rgba(16,185,129,0.35)"}`, color: issueMode === "차감" ? "#fca5a5" : "#86efac", fontSize: 12, fontWeight: 800 }}>
-                {issueMode === "차감" ? "회수 예정" : "사용가능"}
+              <div style={{ borderRadius: 999, padding: "6px 10px", background: "rgba(16,185,129,0.18)", border: "1px solid rgba(16,185,129,0.35)", color: "#86efac", fontSize: 12, fontWeight: 800 }}>
+                사용가능
               </div>
             </div>
 
@@ -5059,12 +5283,12 @@ function VipAdminVouchersPage() {
 
       <div style={panelStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, marginBottom: 14, flexWrap: "wrap" }}>
-          <div style={{ fontSize: 17, fontWeight: 800 }}>최근 발행 상품권</div>
-          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.58)" }}>최근 지급 내역 기준</div>
+          <div style={{ fontSize: 17, fontWeight: 800 }}>{selectedMember?.name ? `${selectedMember.name}님 사용가능 상품권` : "최근 발행 상품권"}</div>
+          <div style={{ fontSize: 12, color: "rgba(255,255,255,0.58)" }}>{selectedMember?.name ? "검색한 회원 기준" : "최근 지급 내역 기준"}</div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: isMobile ? "1fr" : "repeat(2, minmax(0, 1fr))", gap: 14 }}>
           {recentVoucherCards.length === 0 ? (
-            <div style={{ color: "rgba(255,255,255,0.45)", padding: "12px 2px" }}>발행된 VIP 상품권이 없습니다.</div>
+            <div style={{ color: "rgba(255,255,255,0.45)", padding: "12px 2px" }}>사용가능한 VIP 상품권이 없습니다.</div>
           ) : recentVoucherCards.map((log) => (
             <div key={log.id} style={voucherCardStyle}>
               <div style={{ position: "absolute", inset: 0, background: "linear-gradient(135deg, rgba(255,255,255,0.12), transparent 42%)", pointerEvents: "none" }} />
@@ -5073,7 +5297,19 @@ function VipAdminVouchersPage() {
                   <div style={{ fontSize: 14, color: "#f8d978", fontWeight: 800 }}>🎟️ VIP 상품권</div>
                   <div style={{ marginTop: 4, fontSize: 13, color: "rgba(255,255,255,0.72)" }}>지역공유발전플랫폼</div>
                 </div>
-                <div style={{ borderRadius: 999, padding: "6px 10px", background: getVoucherStatusStyle(log.statusLabel).background, border: `1px solid ${getVoucherStatusStyle(log.statusLabel).borderColor}`, color: getVoucherStatusStyle(log.statusLabel).color, fontSize: 12, fontWeight: 800 }}>{log.statusLabel}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap", justifyContent: "flex-end" }}>
+                  {log.statusLabel === "사용가능" ? (
+                    <button
+                      type="button"
+                      onClick={() => handleCancelIssuedVoucher(log)}
+                      disabled={voucherCancellingSerial === log.serial}
+                      style={{ ...buttonStyle("rgba(127,29,29,0.35)", "#fecaca"), padding: "6px 10px", fontSize: 11, border: "1px solid rgba(248,113,113,0.7)", opacity: voucherCancellingSerial === log.serial ? 0.6 : 1 }}
+                    >
+                      {voucherCancellingSerial === log.serial ? "취소중" : "발행취소"}
+                    </button>
+                  ) : null}
+                  <div style={{ borderRadius: 999, padding: "6px 10px", background: getVoucherStatusStyle(log.statusLabel).background, border: `1px solid ${getVoucherStatusStyle(log.statusLabel).borderColor}`, color: getVoucherStatusStyle(log.statusLabel).color, fontSize: 12, fontWeight: 800 }}>{log.statusLabel}</div>
+                </div>
               </div>
               <div style={{ fontSize: isMobile ? 24 : 30, fontWeight: 900, color: "#fff4c2", marginBottom: 16 }}>{formatVoucherAmount(log.amountAbs)}</div>
               <div style={{ display: "grid", gap: 6, fontSize: 13, color: "rgba(255,255,255,0.74)" }}>
@@ -5115,8 +5351,9 @@ function VipAdminVouchersPage() {
             <select style={inputStyle} value={filters.status} onChange={(event) => setFilters((prev) => ({ ...prev, status: event.target.value }))}>
               <option value="">전체</option>
               <option value="사용가능">사용가능</option>
+              <option value="취소됨">취소됨</option>
               <option value="회수됨">회수됨</option>
-              <option value="사용됨">사용됨</option>
+              <option value="사용완료">사용완료</option>
             </select>
           </div>
         </div>
@@ -5136,29 +5373,59 @@ function VipAdminVouchersPage() {
               </tr>
             </thead>
             <tbody>
-              {filteredLogs.length === 0 ? (
+              {groupedLedgerLogs.length === 0 ? (
                 <tr><td colSpan={8} style={{ padding: 28, textAlign: "center", color: "rgba(255,255,255,0.45)" }}>표시할 상품권 원장이 없습니다.</td></tr>
-              ) : filteredLogs.map((log) => (
-                <tr key={log.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
-                  <td style={{ padding: "14px 10px" }}>{formatVoucherDateTime(log.createdAt)}</td>
-                  <td style={{ padding: "14px 10px", fontFamily: "Consolas, Monaco, monospace", color: "#f8d978" }}>{log.serial}</td>
-                  <td style={{ padding: "14px 10px" }}>
-                    {String(log.targetType || "") === "shop"
-                      ? (log.shopName || log.descShopName || log.shopId || log.memberId || "-")
-                      : (log.memberName || log.memberId || "-")}
-                  </td>
-                  <td style={{ padding: "14px 10px" }}>{log.direction}</td>
-                  <td style={{ padding: "14px 10px", textAlign: "right", fontWeight: 800, color: log.direction === "지급" ? "#86efac" : log.direction === "사용" ? "#fca5a5" : "#fda4af" }}>{formatVoucherAmount(log.amountAbs)}</td>
-                  <td style={{ padding: "14px 10px", color: getVoucherStatusStyle(log.statusLabel).color, fontWeight: 800 }}>{log.statusLabel}</td>
-                  <td style={{ padding: "14px 10px" }}>{log.issueRegion || "-"}</td>
-                  <td style={{ padding: "14px 10px", color: "rgba(255,255,255,0.78)" }}>
-                    {log.reason ||
-                      (String(log.source || "").toUpperCase() === "VOUCHER_SHOP_TRANSFER_IN" && log.fromMemberName
-                        ? `${log.fromMemberName} 결제 상품권`
-                        : "-")}
-                  </td>
-                </tr>
-              ))}
+              ) : groupedLedgerLogs.map((group) => {
+                const isExpanded = group.logs.length === 1 ? true : !!ledgerExpandedGroups[group.key];
+                return (
+                  <>
+                    <tr key={`group-${group.key}`} style={{ borderBottom: "1px solid rgba(255,255,255,0.08)", background: "rgba(255,255,255,0.03)" }}>
+                      <td colSpan={8} style={{ padding: "10px 12px" }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 12, flexWrap: "wrap" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                            <span style={{ fontSize: 13, fontWeight: 800 }}>{group.targetType === "shop" ? "📁 상점" : "📁 회원"}</span>
+                            <span style={{ fontSize: 13, fontWeight: 800, color: "#fff" }}>{group.label}</span>
+                            <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 999, background: "rgba(59,130,246,0.16)", color: "#93c5fd", fontWeight: 700 }}>{group.logs.length}건</span>
+                            <span style={{ fontSize: 11, padding: "2px 8px", borderRadius: 999, background: group.totalAmount >= 0 ? "rgba(110,231,183,0.15)" : "rgba(248,113,113,0.15)", color: group.totalAmount >= 0 ? "#6ee7b7" : "#f87171", fontWeight: 700 }}>
+                              합계 {group.totalAmount > 0 ? "+" : ""}{group.totalAmount.toLocaleString("ko-KR")}원
+                            </span>
+                          </div>
+                          {group.logs.length > 1 ? (
+                            <button
+                              type="button"
+                              onClick={() => setLedgerExpandedGroups((prev) => ({ ...prev, [group.key]: !prev[group.key] }))}
+                              style={{ ...buttonStyle("rgba(255,255,255,0.08)"), padding: "8px 12px", fontSize: 12 }}
+                            >
+                              {isExpanded ? "접기" : "더보기"}
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                    {isExpanded ? group.logs.map((log) => (
+                      <tr key={log.id} style={{ borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+                        <td style={{ padding: "14px 10px" }}>{formatVoucherDateTime(log.createdAt)}</td>
+                        <td style={{ padding: "14px 10px", fontFamily: "Consolas, Monaco, monospace", color: "#f8d978" }}>{log.serial}</td>
+                        <td style={{ padding: "14px 10px" }}>
+                          {String(log.targetType || "") === "shop"
+                            ? (log.shopName || log.descShopName || log.shopId || log.memberId || "-")
+                            : (log.memberName || log.memberId || "-")}
+                        </td>
+                        <td style={{ padding: "14px 10px" }}>{log.direction}</td>
+                        <td style={{ padding: "14px 10px", textAlign: "right", fontWeight: 800, color: log.direction === "지급" ? "#86efac" : log.direction === "사용" ? "#fca5a5" : "#fda4af" }}>{formatVoucherAmount(log.amountAbs)}</td>
+                        <td style={{ padding: "14px 10px", color: getVoucherStatusStyle(log.statusLabel).color, fontWeight: 800 }}>{log.statusLabel}</td>
+                        <td style={{ padding: "14px 10px" }}>{log.issueRegion || "-"}</td>
+                        <td style={{ padding: "14px 10px", color: "rgba(255,255,255,0.78)" }}>
+                          {log.reason ||
+                            (String(log.source || "").toUpperCase() === "VOUCHER_SHOP_TRANSFER_IN" && log.fromMemberName
+                              ? `${log.fromMemberName} 결제 상품권`
+                              : "-")}
+                        </td>
+                      </tr>
+                    )) : null}
+                  </>
+                );
+              })}
             </tbody>
           </table>
         </div>
@@ -5520,6 +5787,7 @@ function GlobalChatFloatingBadge({ isLoggedIn }) {
 
   const regionId = getCurrentRegionId();
   const onRegionChatPage = /^\/r\/[^/]+\/chat(?:\/|$)/.test(location.pathname);
+  const onMyOfficePage = /^\/my(?:\/|$)|^\/myoffice(?:\/|$)/.test(location.pathname);
 
   useEffect(() => {
     try {
@@ -5576,7 +5844,7 @@ function GlobalChatFloatingBadge({ isLoggedIn }) {
   }, []);
 
   useEffect(() => {
-    if (!isLoggedIn || !myMemberId || !regionId) {
+    if (!isLoggedIn || !myMemberId || !regionId || onMyOfficePage) {
       if (pollTimerRef.current) {
         window.clearInterval(pollTimerRef.current);
         pollTimerRef.current = null;
@@ -5701,9 +5969,9 @@ function GlobalChatFloatingBadge({ isLoggedIn }) {
         pollTimerRef.current = null;
       }
     };
-  }, [isLoggedIn, myMemberId, onRegionChatPage, regionId, session?.token]);
+  }, [isLoggedIn, myMemberId, onRegionChatPage, onMyOfficePage, regionId, session?.token]);
 
-  if (!isLoggedIn || !myMemberId || !regionId) return null;
+  if (!isLoggedIn || !myMemberId || !regionId || onMyOfficePage) return null;
 
   const onPointerDown = (event) => {
     const startX = event.clientX;
@@ -5968,7 +6236,7 @@ export default function App() {
           </Route>
           <Route path="/posts/:id" element={<PostDetail />} />
           <Route path="/notices" element={<Notices />} />
-          <Route path="/notices/:id" element={<NoticeDetail />} />
+          <Route path="/notices/:id" element={<Notices />} />
           <Route path="/missions" element={<Missions />} />
           <Route path="/support" element={<Support />} />
           <Route path="/card" element={<Card />} />

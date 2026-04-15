@@ -19,6 +19,46 @@ import PageHeader from '../components/PageHeader';
 import * as storageAdapter from '../lib/storageAdapter';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 
+const REGION_NAME_CACHE_KEY = 'su_region_name_cache_v1';
+
+function readRegionNameCache() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(REGION_NAME_CACHE_KEY) || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (e) {
+    return {};
+  }
+}
+
+function writeRegionNameCache(rows) {
+  try {
+    const prev = readRegionNameCache();
+    const next = { ...prev };
+    (Array.isArray(rows) ? rows : []).forEach((region) => {
+      const id = String(region?.id || region?.regionId || region?.region_id || '').trim();
+      const name = String(region?.name || region?.regionName || region?.region_name || '').trim();
+      if (id && name) next[id] = name;
+    });
+    localStorage.setItem(REGION_NAME_CACHE_KEY, JSON.stringify(next));
+  } catch (e) {
+    // noop
+  }
+}
+
+function getCachedRegionName(regionId) {
+  const id = String(regionId || '').trim();
+  if (!id) return '';
+  try {
+    const selectedId = String(localStorage.getItem('selectedRegionId') || '').trim();
+    const selectedName = String(localStorage.getItem('selectedRegionName') || '').trim();
+    if (selectedId && selectedId === id && selectedName) return selectedName;
+  } catch (e) {
+    // noop
+  }
+  const cached = readRegionNameCache();
+  return String(cached[id] || '').trim();
+}
+
 const TABS = [
   { key: 'home',      label: '지역홈',      path: '' },
   { key: 'intro',     label: '지역소개', path: '/intro' },
@@ -60,7 +100,11 @@ export default function RegionLayout() {
   const { regionId } = useParams();
   const navigate = useNavigate();
   const { pathname } = useLocation();
-  const [regionName, setRegionName] = useState(regionId || '');
+  const [regionName, setRegionName] = useState(() => {
+    const id = String(regionId || '').trim();
+    if (!id) return '';
+    return getCachedRegionName(id) || '지역';
+  });
   const [regions, setRegions] = useState([]);
 
   // 기존 Outlet 호환 유지를 위해 빈 값 유지
@@ -89,27 +133,60 @@ export default function RegionLayout() {
     return storageAdapter.getRegions()
       .then(all => {
         const visibleRegions = (all || []).filter((region) => region?.isPublic !== false);
+        writeRegionNameCache(visibleRegions);
         setRegions((prev) => (isSameRegionList(prev, visibleRegions) ? prev : visibleRegions));
         const found = visibleRegions.find(r =>
           String(r.id || r.regionId || r.region_id) === String(regionId)
         );
-        const nextRegionName = found ? (found.name || regionId) : regionId;
-        setRegionName((prev) => (prev === nextRegionName ? prev : nextRegionName));
+        if (found) {
+          const foundId = String(found.id || found.regionId || found.region_id || '').trim();
+          const nextRegionName = String(found.name || found.regionName || regionId || '').trim();
+          setRegionName((prev) => (prev === nextRegionName ? prev : nextRegionName));
+          try {
+            if (foundId) localStorage.setItem('selectedRegionId', foundId);
+            if (nextRegionName) localStorage.setItem('selectedRegionName', nextRegionName);
+          } catch (e) {
+            // noop
+          }
+        } else if (visibleRegions.length > 0) {
+          // URL의 regionId가 DB에 없음 → localStorage 오래된 ID 자동 갱신
+          const savedId = localStorage.getItem('selectedRegionId');
+          if (savedId === regionId || !savedId) {
+            const fallback = visibleRegions[0];
+            const fallbackId = String(fallback.id || fallback.regionId || fallback.region_id);
+            localStorage.setItem('selectedRegionId', fallbackId);
+            if (fallback.name) localStorage.setItem('selectedRegionName', fallback.name);
+            navigate(`/r/${fallbackId}`, { replace: true });
+          } else {
+            setRegionName('지역');
+          }
+        }
       })
       .catch(() => {
         setRegions((prev) => (prev.length === 0 ? prev : []));
-        setRegionName((prev) => (prev === regionId ? prev : regionId));
+        setRegionName((prev) => (prev === '지역' ? prev : '지역'));
       });
-  }, [isSameRegionList, regionId]);
+  }, [isSameRegionList, regionId, navigate]);
 
   useEffect(() => {
     loadRegions();
   }, [loadRegions]);
 
-  useAutoRefresh(loadRegions, { enabled: !!regionId, intervalMs: 30000 });
+  useAutoRefresh(loadRegions, { enabled: !!regionId, intervalMs: 120000 });
 
   useEffect(() => {
-    setSelectedRegionOptionId(regionId || '');
+    const nextId = String(regionId || '').trim();
+    setSelectedRegionOptionId(nextId);
+    if (!nextId) {
+      setRegionName('');
+      return;
+    }
+    const cachedName = getCachedRegionName(nextId);
+    if (cachedName) {
+      setRegionName((prev) => (prev === cachedName ? prev : cachedName));
+    } else {
+      setRegionName((prev) => (prev === '지역' ? prev : '지역'));
+    }
   }, [regionId]);
 
   const regionOptions = useMemo(() => {

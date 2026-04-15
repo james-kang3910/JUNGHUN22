@@ -724,6 +724,24 @@ export default function RegionalAdminConsole() {
         return [
           { key: "title", label: "제목", type: "text", placeholder: "공지 제목" },
           { key: "content", label: "내용", type: "textarea", rows: 5, placeholder: "공지 내용을 입력하세요" },
+          {
+            key: "imageUrl",
+            label: "공지 이미지",
+            type: "custom",
+            customRender: (value, onChange) => (
+              <MultiImageUploader
+                value={value ? [value] : []}
+                maxImages={1}
+                onChange={(nextImages) => onChange(Array.isArray(nextImages) && nextImages[0] ? nextImages[0] : "")}
+                uploadImage={async (file) => {
+                  const result = await storageAdapter.uploadContentImage(file, { context: 'regional-notices' });
+                  return result.imageUrl || result.url || "";
+                }}
+                onError={(message) => setToast({ open: true, message, type: "error" })}
+                helperText="공지 이미지는 1장까지 등록할 수 있습니다."
+              />
+            ),
+          },
           { key: "isPinned", label: "상단 고정", type: "checkbox" },
           { key: "isPublic", label: "공개", type: "checkbox" },
         ];
@@ -1100,6 +1118,7 @@ export default function RegionalAdminConsole() {
         return {
           title: item?.title || "",
           content: item?.content || "",
+          imageUrl: item?.imageUrl || item?.image_url || "",
           isPinned: !!item?.isPinned,
           isPublic: item?.isPublic !== false,
         };
@@ -1326,6 +1345,7 @@ export default function RegionalAdminConsole() {
           const payload = {
             title: form.title.trim(),
             content: form.content.trim(),
+            imageUrl: String(form.imageUrl || '').trim() || null,
             scope: "REGION",
             regionId: selectedRegionId,
             isPinned: !!form.isPinned,
@@ -1876,11 +1896,11 @@ export default function RegionalAdminConsole() {
       case "notices":
         return [item?.isPinned ? "고정" : "일반", item?.isPublic === false ? "비공개" : "공개", `등록 ${formatDate(item?.createdAt)}`];
       case "events":
-        return [item?.category || "general", itemRewardType === "vip" ? `VIP ${itemRewardAmount.toLocaleString("ko-KR")}\uc6d0` : `${itemRewardAmount.toLocaleString("ko-KR")}P`, (item?.isActive === false || String(item?.status || "").toLowerCase() === "inactive") ? "\ube44\ud65c\uc131" : "\ud65c\uc131"];
+        return [item?.category || "general", itemRewardType === "vip" ? `VIP ${itemRewardAmount.toLocaleString("ko-KR")}원` : `${itemRewardAmount.toLocaleString("ko-KR")}P`, (item?.isActive === false || String(item?.status || "").toLowerCase() === "inactive") ? "비활성" : "활성"];
       case "festivals":
         return [item?.location || "장소 미지정", `기간 ${formatDate(item?.startAt || item?.startDate)} ~ ${formatDate(item?.endAt || item?.endDate)}`, item?.isActive === false ? "비활성" : "활성"];
       case "missions":
-        return [item?.category || "general", itemRewardType === "vip" ? `VIP ${itemRewardAmount.toLocaleString("ko-KR")}\uc6d0` : `${itemRewardAmount.toLocaleString("ko-KR")}P`, item?.isActive === false ? "\ube44\ud65c\uc131" : "\ud65c\uc131"];
+        return [item?.category || "general", itemRewardType === "vip" ? `VIP ${itemRewardAmount.toLocaleString("ko-KR")}원` : `${itemRewardAmount.toLocaleString("ko-KR")}P`, item?.isActive === false ? "비활성" : "활성"];
       case "broadcasts":
         return [item?.isLive || item?.is_live ? "LIVE" : "대기", item?.isPublic === false ? "비공개" : "공개", `등록 ${formatDate(item?.createdAt)}`];
       case "auditions":

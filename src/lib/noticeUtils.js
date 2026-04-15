@@ -79,6 +79,7 @@ export function formatNotice(notice) {
     scope: notice.scope,
     regionId: normalizedRegionId,
     regionIds: normalizedRegionIds,
+    imageUrl: notice?.imageUrl || notice?.image_url || '',
     status: notice.status,
     author: normalizedAuthor,
     authorId: notice.authorId,

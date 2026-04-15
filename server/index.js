@@ -2445,6 +2445,7 @@ async function initDatabase() {
         await db.run(`ALTER TABLE notices ADD COLUMN IF NOT EXISTS is_popup BOOLEAN DEFAULT false`);
         await db.run(`ALTER TABLE notices ADD COLUMN IF NOT EXISTS is_pinned BOOLEAN DEFAULT false`);
         await db.run(`ALTER TABLE notices ADD COLUMN IF NOT EXISTS is_public BOOLEAN DEFAULT true`);
+        await db.run(`ALTER TABLE notices ADD COLUMN IF NOT EXISTS image_url TEXT`);
       } catch (e) { /* 컬럼이 이미 존재할 수 있음 */ }
       await db.run(`CREATE INDEX IF NOT EXISTS idx_notices_scope ON notices(scope)`);
       await db.run(`CREATE INDEX IF NOT EXISTS idx_notices_status ON notices(status)`);
@@ -2598,6 +2599,7 @@ async function initDatabase() {
       try { await db.run(`ALTER TABLE notices ADD COLUMN is_popup INTEGER DEFAULT 0`); } catch (e) {}
       try { await db.run(`ALTER TABLE notices ADD COLUMN is_pinned INTEGER DEFAULT 0`); } catch (e) {}
       try { await db.run(`ALTER TABLE notices ADD COLUMN is_public INTEGER DEFAULT 1`); } catch (e) {}
+      try { await db.run(`ALTER TABLE notices ADD COLUMN image_url TEXT`); } catch (e) {}
       await db.run(`CREATE INDEX IF NOT EXISTS idx_notices_scope ON notices(scope)`);
       await db.run(`CREATE INDEX IF NOT EXISTS idx_notices_status ON notices(status)`);
       await db.run(`CREATE INDEX IF NOT EXISTS idx_notices_region_id ON notices(region_id)`);
@@ -3754,7 +3756,7 @@ app.post('/api/auth/login', async (req, res) => {
 // POST /api/auth/register
 app.post('/api/auth/register', async (req, res) => {
   try {
-    const { email, password, name, phone, regionId } = req.body || {};
+    const { email, password, name, phone, regionId, districtId } = req.body || {};
     if (!email) return jsonFail(res, 400, '이메일을 입력해주세요.');
     if (!password) return jsonFail(res, 400, '비밀번호를 입력해주세요.');
     if (!regionId) return jsonFail(res, 400, '지역을 선택해주세요.');
@@ -3777,21 +3779,21 @@ app.post('/api/auth/register', async (req, res) => {
       if (exists) return jsonFail(res, 409, '이미 가입된 이메일입니다.');
       const passwordHash = await bcrypt.hash(String(password), 10);
       const result = await db.get(
-        'INSERT INTO members(email, name, phone, password_hash, status, role, region_id, created_at, updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING member_id',
-        [normalizedEmail, name || '', phone || '', passwordHash, 'ACTIVE', 'USER', regionId, now, now]
+        'INSERT INTO members(email, name, phone, password_hash, status, role, region_id, district_id, created_at, updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING member_id',
+        [normalizedEmail, name || '', phone || '', passwordHash, 'ACTIVE', 'USER', regionId, districtId || null, now, now]
       );
       const newMemberId = result.member_id;
-      return jsonOk(res, { member: { memberId: newMemberId, email: normalizedEmail, name: name || '', phone: phone || '', regionId, status: 'ACTIVE', role: 'USER' } });
+      return jsonOk(res, { member: { memberId: newMemberId, email: normalizedEmail, name: name || '', phone: phone || '', regionId, districtId: districtId || null, status: 'ACTIVE', role: 'USER' } });
     } else {
       // SQLite: memberId is custom string ID
       const exists = await db.get('SELECT 1 FROM members WHERE LOWER(email) = LOWER(?) LIMIT 1', [normalizedEmail]);
       if (exists) return jsonFail(res, 409, '이미 가입된 이메일입니다.');
       const passwordHash = await bcrypt.hash(String(password), 10);
       await db.run(
-        'INSERT INTO members(memberId, name, email, phone, passwordHash, password, regionId, status, role, createdAt, updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-        [memberId, name || '', normalizedEmail, phone || '', passwordHash, '', regionId, 'ACTIVE', 'USER', now, now]
+        'INSERT INTO members(memberId, name, email, phone, passwordHash, password, regionId, districtId, status, role, createdAt, updatedAt) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)',
+        [memberId, name || '', normalizedEmail, phone || '', passwordHash, '', regionId, districtId || null, 'ACTIVE', 'USER', now, now]
       );
-      return jsonOk(res, { member: { memberId, email: normalizedEmail, name: name || '', phone: phone || '', regionId, status: 'ACTIVE', role: 'USER' } });
+      return jsonOk(res, { member: { memberId, email: normalizedEmail, name: name || '', phone: phone || '', regionId, districtId: districtId || null, status: 'ACTIVE', role: 'USER' } });
     }
   } catch (err) {
     logger.error('Error during register:', err);
@@ -4908,6 +4910,22 @@ app.post('/api/admin/restore', async (req, res) => {
       try {
         await _pgc.query(`SELECT setval('point_ledger_ledger_id_seq', GREATEST((SELECT COALESCE(MAX(ledger_id),1) FROM point_ledger), 1))`);
       } catch(e) { errors.push(`[Seq] point_ledger_ledger_id_seq reset: ${e.message}`); }
+    }
+    // ★ 오디션 관련 SERIAL 시퀀스 재설정 → 복원 후 지원/투표/댓글 등록 시 PK 충돌 방지
+    if (USE_POSTGRES && (data.audition_submissions||[]).length > 0) {
+      try {
+        await _pgc.query(`SELECT setval('audition_submissions_submission_id_seq', GREATEST((SELECT COALESCE(MAX(submission_id),1) FROM audition_submissions), 1))`);
+      } catch(e) { errors.push(`[Seq] audition_submissions_submission_id_seq reset: ${e.message}`); }
+    }
+    if (USE_POSTGRES && (data.audition_votes||[]).length > 0) {
+      try {
+        await _pgc.query(`SELECT setval('audition_votes_vote_id_seq', GREATEST((SELECT COALESCE(MAX(vote_id),1) FROM audition_votes), 1))`);
+      } catch(e) { errors.push(`[Seq] audition_votes_vote_id_seq reset: ${e.message}`); }
+    }
+    if (USE_POSTGRES && (data.audition_submission_comments||[]).length > 0) {
+      try {
+        await _pgc.query(`SELECT setval('audition_submission_comments_comment_id_seq', GREATEST((SELECT COALESCE(MAX(comment_id),1) FROM audition_submission_comments), 1))`);
+      } catch(e) { errors.push(`[Seq] audition_submission_comments_comment_id_seq reset: ${e.message}`); }
     }
     // Supplies
     for (const item of data.supplies || []) {
@@ -9603,6 +9621,13 @@ app.put('/api/districts/:id', async (req, res) => {
 app.delete('/api/districts/:id', async (req, res) => {
   try {
     const districtId = req.params.id;
+    // 구/군 삭제 시 해당 구/군을 참조하는 지역 공지의 district_id를 비워 orphan 필터 문제를 방지
+    if (USE_POSTGRES) {
+      await db.run(`UPDATE notices SET district_id = NULL, updated_at = NOW() WHERE district_id = $1`, [districtId]);
+    } else {
+      await db.run(`UPDATE notices SET district_id = NULL, updated_at = datetime('now') WHERE district_id = ?`, [districtId]);
+    }
+
     const query = USE_POSTGRES
       ? `DELETE FROM districts WHERE district_id = $1`
       : `DELETE FROM districts WHERE districtId = ?`;
@@ -12333,6 +12358,28 @@ app.post('/api/upload/region-image', requireAuth, regionImageUpload.single('imag
 app.get('/api/banners', async (req, res) => {
   try {
     const { regionId, activeOnly } = req.query;
+
+    const parseBannerRegions = (raw) => {
+      if (Array.isArray(raw)) return raw.map((v) => String(v || '').trim()).filter(Boolean);
+      if (raw == null) return [];
+
+      let value = raw;
+      for (let i = 0; i < 2; i += 1) {
+        if (typeof value !== 'string') break;
+        const trimmed = value.trim();
+        if (!trimmed) return [];
+        try {
+          value = JSON.parse(trimmed);
+        } catch (e) {
+          return [];
+        }
+      }
+
+      if (Array.isArray(value)) {
+        return value.map((v) => String(v || '').trim()).filter(Boolean);
+      }
+      return [];
+    };
     
     let query, params = [];
     
@@ -12357,14 +12404,9 @@ app.get('/api/banners', async (req, res) => {
     rows = rows.filter(banner => {
       // Region filter
       if (regionId) {
-        try {
-          const regionsField = USE_POSTGRES ? banner.regions : banner.regions;
-          const regions = regionsField ? JSON.parse(regionsField) : [];
-          if (regions.length > 0 && !regions.includes(regionId)) {
-            return false;
-          }
-        } catch (e) {
-          // Invalid JSON, skip region filter for this banner
+        const regions = parseBannerRegions(banner.regions);
+        if (regions.length > 0 && !regions.includes(String(regionId))) {
+          return false;
         }
       }
       
@@ -12397,7 +12439,7 @@ app.get('/api/banners', async (req, res) => {
           videoUrl: b.video_url || null,
           alt: b.alt,
           linkUrl: b.link_url,
-          regions: b.regions ? JSON.parse(b.regions) : [],
+          regions: parseBannerRegions(b.regions),
           startDate: b.start_date,
           endDate: b.end_date,
           isActive: b.is_active,
@@ -12422,7 +12464,7 @@ app.get('/api/banners', async (req, res) => {
           videoUrl: b.videoUrl || null,
           alt: b.alt,
           linkUrl: b.linkUrl,
-          regions: b.regions ? JSON.parse(b.regions) : [],
+          regions: parseBannerRegions(b.regions),
           startDate: b.startDate,
           endDate: b.endDate,
           isActive: !!b.isActive,
@@ -14503,8 +14545,7 @@ app.post('/api/participations/reward', async (req, res) => {
     if (safeRewardType === 'points') {
       safeRewardAmount = configuredRewardAmount > 0 ? configuredRewardAmount : requestedRewardAmount;
     } else if (safeRewardType === 'vip' || safeRewardType === 'voucher') {
-      if (configuredRewardAmount > 0) safeRewardAmount = configuredRewardAmount;
-      else if (requestedRewardAmount <= 0) safeRewardAmount = 1;
+      safeRewardAmount = configuredRewardAmount > 0 ? configuredRewardAmount : requestedRewardAmount;
     }
 
     let pointsAwarded = 0;
@@ -14530,8 +14571,11 @@ app.post('/api/participations/reward', async (req, res) => {
       }
       pointsAwarded = safeRewardAmount;
     } else if (safeRewardType === 'vip' || safeRewardType === 'voucher') {
+      if (safeRewardAmount <= 0) {
+        return res.status(400).json({ error: 'reward_amount_required', message: '상품권 보상 수량이 필요합니다.' });
+      }
       const voucherType = safeRewardType === 'vip' ? 'SHOP_USE' : 'MISSION_REWARD';
-      const voucherAmount = safeRewardAmount > 0 ? safeRewardAmount : 1;
+      const voucherAmount = safeRewardAmount;
       const description = safeRewardDescription || (safeRewardType === 'vip' ? `${title || itemKey} VIP 상품권 지급` : `${title || itemKey} 보상 상품권 지급`);
       if (USE_POSTGRES) {
         await db.run(
@@ -17209,8 +17253,6 @@ app.get('/api/notices', async (req, res) => {
       if (districtId) {
         params.push(districtId);
         query += USE_POSTGRES ? ` AND district_id = $${paramCounter++}` : ' AND district_id = ?';
-      } else {
-        query += ' AND district_id IS NULL';
       }
     }
     
@@ -17237,6 +17279,7 @@ app.get('/api/notices', async (req, res) => {
       author: r.author,
       authorId: r.author_id,
       districtId: r.district_id,
+      imageUrl: r.image_url || r.imageUrl || null,
       createdAt: r.created_at,
       updatedAt: r.updated_at
     } : {
@@ -17252,6 +17295,7 @@ app.get('/api/notices', async (req, res) => {
       status: r.status,
       author: r.author,
       authorId: r.author_id,
+      imageUrl: r.image_url || r.imageUrl || null,
       createdAt: r.created_at,
       updatedAt: r.updated_at
     });
@@ -17292,6 +17336,7 @@ app.get('/api/notices/:id', async (req, res) => {
       status: row.status,
       author: row.author,
       authorId: row.author_id,
+      imageUrl: row.image_url || row.imageUrl || null,
       createdAt: row.created_at,
       updatedAt: row.updated_at
     } : {
@@ -17307,6 +17352,7 @@ app.get('/api/notices/:id', async (req, res) => {
       status: row.status,
       author: row.author,
       authorId: row.author_id,
+      imageUrl: row.image_url || row.imageUrl || null,
       createdAt: row.created_at,
       updatedAt: row.updated_at
     };
@@ -17321,7 +17367,7 @@ app.get('/api/notices/:id', async (req, res) => {
 // POST /api/notices - 공지사항 생성
 app.post('/api/notices', async (req, res) => {
   try {
-    const { id, title, content, scope, regionId, regionIds, status, author, authorId, isPopup, isPinned, isPublic, districtId } = req.body;
+    const { id, title, content, scope, regionId, regionIds, status, author, authorId, isPopup, isPinned, isPublic, districtId, imageUrl } = req.body;
     
     if (!title || !content) {
       return res.status(400).json({ error: 'title and content required' });
@@ -17332,8 +17378,8 @@ app.post('/api/notices', async (req, res) => {
     
     if (USE_POSTGRES) {
       await db.run(
-        `INSERT INTO notices(id, title, content, scope, region_id, region_ids, is_popup, is_pinned, is_public, status, author, author_id, district_id, created_at, updated_at)
-         VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+        `INSERT INTO notices(id, title, content, scope, region_id, region_ids, is_popup, is_pinned, is_public, status, author, author_id, district_id, image_url, created_at, updated_at)
+         VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
         [
           noticeId,
           title,
@@ -17348,14 +17394,15 @@ app.post('/api/notices', async (req, res) => {
           author || null,
           authorId || null,
           districtId || null,
+          imageUrl || null,
           now,
           now
         ]
       );
     } else {
       await db.run(
-        `INSERT INTO notices(id, title, content, scope, region_id, region_ids, is_popup, is_pinned, is_public, status, author, author_id, district_id, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO notices(id, title, content, scope, region_id, region_ids, is_popup, is_pinned, is_public, status, author, author_id, district_id, image_url, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           noticeId,
           title,
@@ -17370,6 +17417,7 @@ app.post('/api/notices', async (req, res) => {
           author || null,
           authorId || null,
           districtId || null,
+          imageUrl || null,
           now,
           now
         ]
@@ -17388,7 +17436,7 @@ app.patch('/api/notices/:id', async (req, res) => {
   try {
     const { id } = req.params;
     const legacyNoticePk = parseLegacyNoticePk(id);
-    const { title, content, scope, regionId, regionIds, status, isPopup, isPinned, isPublic, districtId } = req.body;
+    const { title, content, scope, regionId, regionIds, status, isPopup, isPinned, isPublic, districtId, imageUrl } = req.body;
     
     const now = new Date().toISOString();
     const updates = [];
@@ -17434,6 +17482,10 @@ app.patch('/api/notices/:id', async (req, res) => {
     if (status !== undefined) {
       params.push(status);
       updates.push(USE_POSTGRES ? `status = $${paramCounter++}` : 'status = ?');
+    }
+    if (imageUrl !== undefined) {
+      params.push(imageUrl || null);
+      updates.push(USE_POSTGRES ? `image_url = $${paramCounter++}` : 'image_url = ?');
     }
 
     const existing = await db.get(

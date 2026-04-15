@@ -34,7 +34,7 @@ export default function RegionSelectPage() {
     loadRegions();
   }, []);
 
-  useAutoRefresh(() => loadRegions(true), { intervalMs: 30000 });
+  useAutoRefresh(() => loadRegions(true), { intervalMs: 120000 });
 
   useEffect(() => {
     if (visibleRegions.length === 1) {

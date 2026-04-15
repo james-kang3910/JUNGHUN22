@@ -10,6 +10,14 @@ import { useRegion } from '../context/RegionContext';
 import { getRegionNotices, formatNotice, getNoticeScopeText } from '../lib/noticeUtils.js';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 
+function resolveNoticeImageUrl(imageUrl) {
+  const raw = String(imageUrl || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw) || raw.startsWith('data:')) return raw;
+  const base = import.meta.env.VITE_API_BASE || '';
+  return `${base}${raw}`;
+}
+
 // 라이트 스타일 상수
 const panelStyle = {
   marginTop: 12,
@@ -56,7 +64,7 @@ export default function RegionNotices() {
     }
   }
 
-  useAutoRefresh(() => loadNotices(true), { enabled: !!regionId, intervalMs: 15000 });
+  useAutoRefresh(() => loadNotices(true), { enabled: !!regionId, intervalMs: 60000 });
 
   function handleNoticeClick(notice) {
     setSelectedNotice(formatNotice(notice));
@@ -115,6 +123,16 @@ export default function RegionNotices() {
                     e.currentTarget.style.borderColor = '#DDE3EA';
                   }}
                 >
+                  {resolveNoticeImageUrl(notice.imageUrl) ? (
+                    <div style={{ marginBottom: 10, borderRadius: 12, overflow: 'hidden', border: '1px solid #DDE3EA', background: '#E2E8F0' }}>
+                      <img
+                        src={resolveNoticeImageUrl(notice.imageUrl)}
+                        alt={notice.title || '공지 이미지'}
+                        style={{ display: 'block', width: '100%', maxHeight: 180, objectFit: 'cover' }}
+                      />
+                    </div>
+                  ) : null}
+
                   <div style={{ display: 'flex', justifyContent: 'space-between', gap: 12, marginBottom: 6 }}>
                     <div>
                       <div style={{
@@ -271,6 +289,16 @@ export default function RegionNotices() {
                 <span>·</span>
                 <span>{selectedNotice.formattedDate}</span>
               </div>
+
+              {resolveNoticeImageUrl(selectedNotice.imageUrl) ? (
+                <div style={{ marginBottom: 16, borderRadius: 14, overflow: 'hidden', border: '1px solid #DDE3EA', background: '#E2E8F0' }}>
+                  <img
+                    src={resolveNoticeImageUrl(selectedNotice.imageUrl)}
+                    alt={selectedNotice.title || '공지 이미지'}
+                    style={{ display: 'block', width: '100%', maxHeight: 260, objectFit: 'cover' }}
+                  />
+                </div>
+              ) : null}
 
               {selectedNotice.content && selectedNotice.content.trim() && (
                 <div style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginTop: 2 }}>

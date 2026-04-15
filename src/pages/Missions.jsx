@@ -106,6 +106,9 @@ export default function Missions() {
   const [submissionForm, setSubmissionForm] = useState({ submissionText: "", submissionLink: "", submissionImages: [] });
   const [submissionError, setSubmissionError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  // 커스텀 다이얼로그 상태
+  const [crossRegionConfirm, setCrossRegionConfirm] = useState(null); // { resolve }
+  const [successMessage, setSuccessMessage] = useState(""); // 성공 토스트 텍스트
   const handledHighlightRef = useRef("");
 
   const eventSectionRef = useRef(null);
@@ -197,6 +200,8 @@ export default function Missions() {
     const loadMissionsEvents = async () => {
       try {
         setLoading(true);
+        storageAdapter.clearEventsCache();
+        storageAdapter.clearMissionsCache();
         const [eventsData, missionsData, regionsData] = await Promise.all([
           storageAdapter.getEvents(),
           storageAdapter.getMissions(),
@@ -205,16 +210,19 @@ export default function Missions() {
         if (aborted) return;
 
         const baseEvents = Array.isArray(eventsData) ? eventsData : [];
-        const regionEventsNormalized = await loadRegionEventPool(regionsData, activeRegionId);
 
-        const mergedEvents = [...baseEvents];
-        const seenEventIds = new Set(baseEvents.map((event) => getStableItemId(event)).filter(Boolean));
-        regionEventsNormalized.forEach((event) => {
-          const eventId = getStableItemId(event);
-          if (!eventId || seenEventIds.has(eventId)) return;
-          seenEventIds.add(eventId);
-          mergedEvents.push(event);
-        });
+        // 지역 포털 내에서만 지역별 이벤트 추가 조회 (일반 /missions 에서는 getEvents()로 충분)
+        let mergedEvents = [...baseEvents];
+        if (isRegionPage && activeRegionId) {
+          const regionEventsNormalized = await loadRegionEventPool(regionsData, activeRegionId);
+          const seenEventIds = new Set(baseEvents.map((event) => getStableItemId(event)).filter(Boolean));
+          regionEventsNormalized.forEach((event) => {
+            const eventId = getStableItemId(event);
+            if (!eventId || seenEventIds.has(eventId)) return;
+            seenEventIds.add(eventId);
+            mergedEvents.push(event);
+          });
+        }
 
         setEvents(mergedEvents);
         setMissions(Array.isArray(missionsData) ? missionsData : []);
@@ -248,16 +256,17 @@ export default function Missions() {
           if (aborted) return;
 
           const baseEvents = Array.isArray(eventsData) ? eventsData : [];
-          const regionEventsNormalized = await loadRegionEventPool(regionsData, activeRegionId);
-
-          const mergedEvents = [...baseEvents];
-          const seenEventIds = new Set(baseEvents.map((event) => getStableItemId(event)).filter(Boolean));
-          regionEventsNormalized.forEach((event) => {
-            const eventId = getStableItemId(event);
-            if (!eventId || seenEventIds.has(eventId)) return;
-            seenEventIds.add(eventId);
-            mergedEvents.push(event);
-          });
+          let mergedEvents = [...baseEvents];
+          if (isRegionPage && activeRegionId) {
+            const regionEventsNormalized = await loadRegionEventPool(regionsData, activeRegionId);
+            const seenEventIds = new Set(baseEvents.map((event) => getStableItemId(event)).filter(Boolean));
+            regionEventsNormalized.forEach((event) => {
+              const eventId = getStableItemId(event);
+              if (!eventId || seenEventIds.has(eventId)) return;
+              seenEventIds.add(eventId);
+              mergedEvents.push(event);
+            });
+          }
 
           setEvents(mergedEvents);
           setMissions(Array.isArray(missionsData) ? missionsData : []);
@@ -525,12 +534,10 @@ let regionScope = item.regionScope || item.region_scope;
     }
 
     if (crossRegion) {
-      const confirmed = window.confirm(
-        `이 ${submissionItem.type === "mission" ? "미션" : "이벤트"}은 가입 지역과 다른 지역 항목입니다.\n그래도 참여 접수를 진행하시겠습니까?`
-      );
-      if (!confirmed) {
-        return;
-      }
+      const confirmed = await new Promise((resolve) => {
+        setCrossRegionConfirm({ resolve });
+      });
+      if (!confirmed) return;
     }
 
     setSubmitting(true);
@@ -555,7 +562,7 @@ let regionScope = item.regionScope || item.region_scope;
 
       await reloadParticipations();
       closeSubmissionModal();
-      window.alert(`${submissionItem.type === "mission" ? "미션" : "이벤트"} 참여 접수가 완료되었습니다. 심사 결과는 마이오피스에서 확인할 수 있습니다.`);
+      setSuccessMessage(`${submissionItem.type === "mission" ? "미션" : "이벤트"} 참여 접수가 완료되었습니다. 심사 결과는 마이오피스에서 확인할 수 있습니다.`);
     } catch (error) {
       setSubmissionError(getParticipationSubmitErrorMessage(error));
     } finally {
@@ -942,6 +949,49 @@ const isAllRegion = regionText === '전체 지역';
                 {submitting ? "제출 중..." : "참여 접수 완료"}
               </button>
             </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── 타지역 참여 확인 모달 ── */}
+      {crossRegionConfirm ? (
+        <div style={{ ...modalOverlayStyle, zIndex: 2000 }} onClick={() => { setCrossRegionConfirm(null); crossRegionConfirm.resolve(false); }}>
+          <div style={{ width: "min(360px,100%)", borderRadius: 24, background: "#fff", padding: "28px 24px 20px", boxShadow: "0 24px 60px rgba(15,23,42,0.22)", display: "flex", flexDirection: "column", gap: 16 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+              <span style={{ fontSize: 26 }}>📍</span>
+              <span style={{ fontSize: 17, fontWeight: 900, color: "#0f172a", letterSpacing: "-0.02em" }}>타지역 참여 확인</span>
+            </div>
+            <p style={{ fontSize: 14, color: "#475569", lineHeight: 1.7, margin: 0, padding: "10px 12px", borderRadius: 12, background: "#fff7ed", border: "1px solid #fdba74" }}>
+              가입 지역과 다른 지역 항목입니다.<br />그래도 참여 접수를 진행하시겠습니까?
+            </p>
+            <div style={{ display: "flex", gap: 8, justifyContent: "flex-end", marginTop: 4 }}>
+              <button type="button"
+                style={{ minHeight: 42, minWidth: 72, borderRadius: 10, border: "1px solid #d4dee8", background: "linear-gradient(180deg,#f8fafc,#f1f5f9)", color: "#334155", fontSize: 14, fontWeight: 700, cursor: "pointer", padding: "0 16px" }}
+                onClick={() => { setCrossRegionConfirm(null); crossRegionConfirm.resolve(false); }}>
+                취소
+              </button>
+              <button type="button"
+                style={{ minHeight: 42, minWidth: 120, borderRadius: 10, border: "none", background: "linear-gradient(135deg,#0f7f96,#0e7490)", color: "#fff", fontSize: 14, fontWeight: 900, cursor: "pointer", padding: "0 20px", boxShadow: "0 6px 16px rgba(14,116,144,0.22)" }}
+                onClick={() => { setCrossRegionConfirm(null); crossRegionConfirm.resolve(true); }}>
+                참여 접수
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
+
+      {/* ── 참여 접수 완료 성공 모달 ── */}
+      {successMessage ? (
+        <div style={{ ...modalOverlayStyle, zIndex: 2000 }} onClick={() => setSuccessMessage("")}>
+          <div style={{ width: "min(360px,100%)", borderRadius: 24, background: "#fff", padding: "30px 24px 22px", boxShadow: "0 24px 60px rgba(15,23,42,0.22)", display: "flex", flexDirection: "column", alignItems: "center", gap: 14, textAlign: "center" }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ width: 60, height: 60, borderRadius: "50%", background: "linear-gradient(135deg,#0f7f96,#0e7490)", display: "flex", alignItems: "center", justifyContent: "center", fontSize: 28, boxShadow: "0 8px 20px rgba(14,116,144,0.28)" }}>✅</div>
+            <div style={{ fontSize: 18, fontWeight: 900, color: "#0f172a", letterSpacing: "-0.02em" }}>참여 접수 완료!</div>
+            <p style={{ fontSize: 14, color: "#475569", lineHeight: 1.7, margin: 0 }}>{successMessage}</p>
+            <button type="button"
+              style={{ marginTop: 4, minHeight: 44, width: "100%", borderRadius: 12, border: "none", background: "linear-gradient(135deg,#0f7f96,#0e7490)", color: "#fff", fontSize: 15, fontWeight: 900, cursor: "pointer", boxShadow: "0 8px 18px rgba(14,116,144,0.22)" }}
+              onClick={() => setSuccessMessage("")}>
+              확인
+            </button>
           </div>
         </div>
       ) : null}

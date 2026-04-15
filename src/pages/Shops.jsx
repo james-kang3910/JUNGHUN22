@@ -280,7 +280,7 @@ export default function Shops() {
     loadServerShops();
   }, [loadServerShops]);
 
-  useAutoRefresh(loadServerShops, { intervalMs: 15000 });
+  useAutoRefresh(loadServerShops, { intervalMs: 60000 });
 
   // staticShops intentionally empty — sample/test shops removed per admin request
   const staticShops = useMemo(() => [], []);
@@ -302,7 +302,7 @@ export default function Shops() {
     loadRegions();
   }, [loadRegions]);
 
-  useAutoRefresh(loadRegions, { intervalMs: 30000 });
+  useAutoRefresh(loadRegions, { intervalMs: 120000 });
 
   // 구/군 목록 (지역 선택 시 동적 로드)
   const [districts, setDistricts] = useState([]);

@@ -209,7 +209,7 @@ export default function RegionNews() {
     }
   }, [districtId, fetchNews, regionId, selected]);
 
-  useAutoRefresh(refreshCurrentView, { enabled: !!regionId, intervalMs: 20000 });
+  useAutoRefresh(refreshCurrentView, { enabled: !!regionId, intervalMs: 60000 });
 
   const handleSelect = async (item) => {
     // 조회수 증가 반영 포함

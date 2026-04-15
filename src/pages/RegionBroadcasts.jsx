@@ -59,7 +59,7 @@ export default function RegionBroadcasts() {
   }
 
   // SSOT 이벤트 수신
-  useAutoRefresh(() => load(true), { enabled: !!regionId, intervalMs: 15000 });
+  useAutoRefresh(() => load(true), { enabled: !!regionId, intervalMs: 60000 });
 
   const vodItems = items.filter(b => !(b.isLive || b.is_live));
 

@@ -563,6 +563,7 @@ body:has(.su-app) {
   inset: 0;
   z-index: 200;
   overflow-y: auto;
+  overflow-x: hidden;
   -webkit-overflow-scrolling: touch;
   /* 틸+초록 브랜드 → 연한 뉴트럴로 흐르는 5단계 그라디언트 */
   background: linear-gradient(180deg,
@@ -624,6 +625,7 @@ body:has(.su-app) {
   z-index: 1;
   width: 100%;
   max-width: 420px;
+  box-sizing: border-box;
   margin: 0 auto;
   padding: 0 16px 48px;
   display: flex;
@@ -653,6 +655,7 @@ body:has(.su-app) {
 }
 .auth-gate__card {
   width: 100%;
+  box-sizing: border-box;
   background: rgba(255,255,255,0.92);
   backdrop-filter: blur(12px);
   -webkit-backdrop-filter: blur(12px);
@@ -1997,10 +2000,11 @@ body:has(.su-home) {
   min-height: 148px;
   border-radius: 18px;
   overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: inset 0 1px 0 rgba(255,255,255,0.32), 0 12px 30px rgba(15, 23, 42, 0.16);
+  display: block;
+  align-items: stretch;
+  justify-content: stretch;
+  box-shadow: none;
+  padding: 0;
 }
 .su-home .su-auditionFeatureMedia .su-cardThumb {
   width: 100%;
@@ -2013,7 +2017,15 @@ body:has(.su-home) {
   aspect-ratio: auto;
 }
 .su-home .su-auditionFeatureMedia--notice {
-  background: linear-gradient(135deg, rgba(168,85,247,0.16), rgba(139,92,246,0.08));
+  background: transparent;
+  border: 0;
+}
+.su-home .su-auditionFeatureMedia--notice img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: cover;
+  border-radius: 18px;
 }
 .su-home .su-auditionFeatureMedia--top {
   background: linear-gradient(145deg, rgba(15,118,110,0.22), rgba(15,23,42,0.08) 52%, rgba(45,212,191,0.16));

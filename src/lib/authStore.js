@@ -387,7 +387,7 @@ export function validatePhone(phone) {
 /**
  * 회원가입 - 서버 우선 정책 적용
  */
-export async function signUp({ name, phone, password, nickname, region, regionId, email }) {
+export async function signUp({ name, phone, password, nickname, region, regionId, districtId, email }) {
   try {
     // 필수 필드 검증
     if (!name || !name.trim()) {
@@ -425,6 +425,7 @@ export async function signUp({ name, phone, password, nickname, region, regionId
       name: name.trim(),
       phone: cleanedPhone,
       regionId,
+      ...(districtId ? { districtId } : {}),
     };
 
     const reg = await storageAdapter.register(registerPayload);

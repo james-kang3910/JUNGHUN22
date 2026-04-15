@@ -12,59 +12,13 @@ import {
 const RAW_API_BASE = import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_URL || "";
 const API_BASE = String(RAW_API_BASE || "").replace(/\/+$/, '').replace(/\/api$/, '');
 
-// 🔍 Issue #1 진단: API_BASE 확인
-console.log("[API_BASE]", API_BASE);
-console.log("[FETCH_CRED]", "include enabled? true (global default)");
-
-// ✅ DEBUG: 상세 요청/응답 로거
-function logDetailedRequest(method, url, options = {}) {
-  const timestamp = new Date().toISOString();
-  console.group(`🔵 [REQ] ${method} ${url}`);
-  console.log('Time:', timestamp);
-  console.log('API_BASE:', API_BASE || '(empty - relative path)');
-  console.log('Full URL:', `${API_BASE}${url}`);
-  console.log('credentials:', options.credentials || 'omit');
-  console.log('Origin:', window.location.origin);
-  console.log('Expected Server:', '127.0.0.1:8787 (via Vite proxy)');
-  console.groupEnd();
-}
-
-function logDetailedResponse(method, url, response, data) {
-  console.group(`🟢 [RES] ${method} ${url}`);
-  console.log('Status:', response.status);
-  console.log('OK:', response.ok);
-  console.log('StatusText:', response.statusText);
-  console.log('Data:', data);
-  console.groupEnd();
-}
-
-function logDetailedError(method, url, error) {
-  console.group(`🔴 [ERR] ${method} ${url}`);
-  console.log('Error:', error.message);
-  console.log('Stack:', error.stack);
-  console.groupEnd();
-}
-
-// 🔍 FORENSIC: 통일된 API 로깅
-function logAPI(operation, url, params, success, result) {
-  const timestamp = new Date().toISOString().substring(11, 23);
-  if (success) {
-    console.log(`[${timestamp}] [API_OK] ${operation} → ${url}`, {
-      params: params || {},
-      resultCount: Array.isArray(result) ? result.length : (result ? 1 : 0)
-    });
-  } else {
-    console.error(`[${timestamp}] [API_FAIL] ${operation} → ${url}`, {
-      params: params || {},
-      error: result
-    });
-  }
-}
-
-// 🔍 Issue #1: Track all requests to find 5174 routing
-function logRequest(method, url) {
-  console.log("[REQ]", method, url, "origin", window.location.origin);
-}
+const IS_DEV = import.meta.env.DEV;
+// noop log functions in production — removes heavy console output from mobile runtime
+const logDetailedRequest = IS_DEV ? (method, url) => console.log(`[REQ] ${method} ${url}`) : () => {};
+const logDetailedResponse = IS_DEV ? (method, url, response) => console.log(`[RES] ${method} ${url}`, response.status) : () => {};
+const logDetailedError = IS_DEV ? (method, url, error) => console.error(`[ERR] ${method} ${url}`, error.message) : () => {};
+const logAPI = IS_DEV ? (op, url, params, ok, result) => console.log(`[API] ${op}`, url, ok ? 'OK' : 'FAIL') : () => {};
+const logRequest = IS_DEV ? (method, url) => console.log(`[REQ] ${method}`, url) : () => {};
 
 async function checkStatus(res) {
   if (!res.ok) {
@@ -442,10 +396,14 @@ function getEffectiveUserId() {
   return null;
 }
 
-async function fetchWithRetry(url, options, maxRetries = 3) {
+async function fetchWithRetry(url, options, maxRetries) {
+  // GET 요청은 1회만 시도 (재시도 시 불필요한 2.5초 지연 방지)
+  // POST/PUT/PATCH/DELETE 등 변경 요청만 2회까지 재시도
+  const method = String(options?.method || 'GET').toUpperCase();
+  const effectiveMaxRetries = maxRetries !== undefined ? maxRetries
+    : (method === 'GET' ? 1 : 2);
+
   let lastError;
-  
-  // ✅ Phase 4: 모든 요청에 x-member-id 헤더 자동 추가
   const effectiveUserId = getEffectiveUserId();
   const enhancedOptions = {
     ...options,
@@ -456,21 +414,15 @@ async function fetchWithRetry(url, options, maxRetries = 3) {
     }
   };
 
-  // Diagnostic: warn if sending empty PATCH/PUT body which likely indicates a bug
-  try {
-    if (enhancedOptions && (enhancedOptions.method === 'PATCH' || enhancedOptions.method === 'PUT') && enhancedOptions.body === JSON.stringify({})) {
-      console.warn(`[storageAdapter] Sending empty ${enhancedOptions.method} body to ${url}`);
-    }
-  } catch (e) {}
-  for (let i = 0; i < maxRetries; i++) {
+  for (let i = 0; i < effectiveMaxRetries; i++) {
     try {
       const res = await fetch(url, enhancedOptions);
       return await checkStatus(res);
     } catch (error) {
       lastError = error;
-      console.warn(`[storageAdapter] Retry ${i + 1}/${maxRetries} for ${url}:`, error.message);
-      if (i < maxRetries - 1) {
-        await new Promise(resolve => setTimeout(resolve, 500 * (i + 1))); // Exponential backoff
+      if (IS_DEV) console.warn(`[storageAdapter] Retry ${i + 1}/${effectiveMaxRetries} for ${url}:`, error.message);
+      if (i < effectiveMaxRetries - 1) {
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
   }
@@ -798,15 +750,18 @@ export async function upsertMission(mission) {
   };
   const method = mission.id ? 'PUT' : 'POST';
   const url = mission.id ? `${API_BASE}/api/missions/${encodeURIComponent(mission.id)}` : `${API_BASE}/api/missions`;
-  return fetchWithRetry(url, {
+  const result = await fetchWithRetry(url, {
     method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
+  clearMissionsCache();
+  return result;
 }
 
 export async function deleteMission(missionId) {
   const result = await fetchWithRetry(`${API_BASE}/api/missions/${encodeURIComponent(missionId)}`, { method: 'DELETE' });
+  clearMissionsCache();
   window.dispatchEvent(new CustomEvent('su:ssot:changed', {
     detail: { type: 'missions', operation: 'delete', missionId }
   }));
@@ -816,13 +771,27 @@ export async function deleteMission(missionId) {
 /**
  * Events API
  */
+let _eventsCacheData = null;
+let _eventsCacheAt = 0;
+const EVENTS_CACHE_TTL = 60000;
+
 export async function getEvents(params = {}) {
   const queryParams = new URLSearchParams();
   if (params.regionId) queryParams.append('regionId', params.regionId);
   if (params.districtId) queryParams.append('districtId', params.districtId);
   const url = `${API_BASE}/api/events${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
-  return fetchWithRetry(url, { method: 'GET' });
+  // 파라미터 없는 전체 조회만 캐시 적용
+  const useCache = !params.regionId && !params.districtId;
+  if (useCache) {
+    const now = Date.now();
+    if (_eventsCacheData && (now - _eventsCacheAt) < EVENTS_CACHE_TTL) return _eventsCacheData;
+  }
+  const result = await fetchWithRetry(url, { method: 'GET' });
+  if (useCache) { _eventsCacheData = result; _eventsCacheAt = Date.now(); }
+  return result;
 }
+
+export function clearEventsCache() { _eventsCacheData = null; _eventsCacheAt = 0; }
 
 export async function getEventById(eventId) {
   return fetchWithRetry(`${API_BASE}/api/events/${encodeURIComponent(eventId)}`, { method: 'GET' });
@@ -849,15 +818,18 @@ export async function upsertEvent(event) {
   };
   const method = event.id ? 'PUT' : 'POST';
   const url = event.id ? `${API_BASE}/api/events/${encodeURIComponent(event.id)}` : `${API_BASE}/api/events`;
-  return fetchWithRetry(url, {
+  const result = await fetchWithRetry(url, {
     method,
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload),
   });
+  clearEventsCache();
+  return result;
 }
 
 export async function deleteEvent(eventId) {
   const result = await fetchWithRetry(`${API_BASE}/api/events/${encodeURIComponent(eventId)}`, { method: 'DELETE' });
+  clearEventsCache();
   window.dispatchEvent(new CustomEvent('su:ssot:changed', {
     detail: { type: 'events', operation: 'delete', eventId }
   }));
@@ -912,21 +884,36 @@ export async function deleteAudition(auditionId) {
 }
 
 /**
- * Regions API
+ * Regions API — TTL 캐시로 중복 호출 방지 (60초)
  */
-export async function getRegions() {
+let _regionsCacheData = null;
+let _regionsCacheAt = 0;
+const REGIONS_CACHE_TTL = 60000;
+
+export async function getRegions({ forceRefresh = false } = {}) {
+  const now = Date.now();
+  if (!forceRefresh && _regionsCacheData && (now - _regionsCacheAt) < REGIONS_CACHE_TTL) {
+    return _regionsCacheData;
+  }
   const result = await fetchWithRetry(`${API_BASE}/api/regions`, { method: 'GET' });
   const regions = unwrapList(result, 'regions');
-  // ✅ id 정규화: 서버 응답에 id가 없는 경우 province-district 조합으로 생성
-  return regions.map((r, index) => ({
+  const normalized = regions.map((r, index) => ({
     ...r,
-    id: r.id 
-      || r.regionId 
-      || r.region_id 
+    id: r.id
+      || r.regionId
+      || r.region_id
       || `${(r.province || 'unknown').toLowerCase().replace(/\s+/g, '-')}-${(r.city || r.district || r.name || `region-${index}`).toLowerCase().replace(/\s+/g, '-')}`,
     city: r.city || r.district || '',
     district: r.district || r.city || ''
   }));
+  _regionsCacheData = normalized;
+  _regionsCacheAt = Date.now();
+  return normalized;
+}
+
+export function clearRegionsCache() {
+  _regionsCacheData = null;
+  _regionsCacheAt = 0;
 }
 
 export async function getRegionById(regionId) {
@@ -2397,6 +2384,10 @@ export async function deleteAdminRegionNews(newsId) {
 //------------------------------------------------------------------------------
 // PV3 완전 복원: Missions Participants API
 //------------------------------------------------------------------------------
+let _missionsCacheData = null;
+let _missionsCacheAt = 0;
+const MISSIONS_CACHE_TTL = 60000;
+
 export async function getMissions(params = {}) {
   const queryParams = new URLSearchParams();
   if (params.status) queryParams.append('status', params.status);
@@ -2404,9 +2395,19 @@ export async function getMissions(params = {}) {
   if (params.districtId) queryParams.append('districtId', params.districtId);
   
   const url = `${API_BASE}/api/missions${queryParams.toString() ? '?' + queryParams.toString() : ''}`;
+  // 파라미터 없는 전체 조회만 캐시 적용
+  const useCache = !params.status && !params.regionId && !params.districtId;
+  if (useCache) {
+    const now = Date.now();
+    if (_missionsCacheData && (now - _missionsCacheAt) < MISSIONS_CACHE_TTL) return _missionsCacheData;
+  }
   const result = await fetchWithRetry(url, { method: 'GET' });
-  return unwrapList(result, 'missions');
+  const list = unwrapList(result, 'missions');
+  if (useCache) { _missionsCacheData = list; _missionsCacheAt = Date.now(); }
+  return list;
 }
+
+export function clearMissionsCache() { _missionsCacheData = null; _missionsCacheAt = 0; }
 
 export async function getMissionById(missionId) {
   const result = await fetchWithRetry(`${API_BASE}/api/missions/${encodeURIComponent(missionId)}`, { method: 'GET' });
