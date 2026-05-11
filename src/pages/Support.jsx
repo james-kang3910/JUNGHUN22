@@ -173,10 +173,11 @@ export default function Support() {
     console.log('[Support] Applying for supply:', { supplyId, userId });
 
     // 중복 신청 방지
-    const alreadyRequested = myRequests.some(r => 
-      String(r.supplyItemId || r.supplyId) === supplyId && 
-      (r.status === 'PENDING' || r.status === 'APPROVED')
-    );
+    const alreadyRequested = myRequests.some((r) => {
+      const requestSupplyId = String(r.supplyItemId || r.supplyId || r.supply_item_id || '').trim();
+      const requestStatus = String(r.status || '').trim().toUpperCase();
+      return requestSupplyId === supplyId && ['PENDING', 'APPROVED', 'CONFIRMED'].includes(requestStatus);
+    });
     if (alreadyRequested) {
       setToast({ open: true, message: "이미 신청한 물품입니다.", type: "warning" });
       return;
@@ -298,7 +299,8 @@ export default function Support() {
           ) : (
             <div style={{ display: "grid", gap: 10 }}>
               {offers.map((offer) => {
-                const isScheduled = offer.status === 'scheduled';
+                const normalizedStatus = String(offer.status || '').toLowerCase();
+                const isScheduled = normalizedStatus === 'scheduled';
                 return (
                   <div key={offer.id} className="su-card" style={{ overflow: 'hidden', padding: 0, borderRadius: 22, border: '1px solid rgba(148,163,184,0.16)', boxShadow: '0 14px 30px rgba(15,23,42,0.08)', background: 'linear-gradient(180deg, #ffffff 0%, #f8fbfd 100%)' }}>
                     {offer.imageUrl ? (

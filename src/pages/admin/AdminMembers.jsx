@@ -301,6 +301,9 @@ export default function AdminMembers() {
       setToast({ open: true, message: '해제 실패: ' + e.message, type: 'error' });
     }
   };
+
+  const getSelectedUserKey = () => String(selectedUser?.memberId || selectedUser?.id || '');
+
   // 회원 정보 저장 (PATCH 이름/전화번호/주소)
   const handleSaveInfo = async () => {
     if (!selectedUser) return;
@@ -352,13 +355,36 @@ export default function AdminMembers() {
           message: enabled ? '보급지원 권한을 부여했습니다.' : '보급지원 권한을 취소했습니다.', 
           type: 'success' 
         });
-        await loadData();
-        if (selectedUser && selectedUser.id === userId) {
-          setSelectedUser({ ...selectedUser, supplyManager: !!enabled });
+        setUsers(prev => prev.map(u => String(u.memberId || u.id || '') === String(userId) ? { ...u, supplyManager: !!enabled } : u));
+        if (selectedUser && getSelectedUserKey() === String(userId)) {
+          setSelectedUser(prev => ({ ...prev, supplyManager: !!enabled }));
         }
+        await loadData();
       }
     } catch (e) {
       console.error('[AdminMembers] toggleSupplyManager error:', e);
+      setToast({ open: true, message: '권한 변경에 실패했습니다.', type: 'error' });
+    }
+  };
+
+  // ★ 유통지원 권한 토글
+  const toggleDistributionManager = async (userId, enabled) => {
+    try {
+      const res = await updateUser(userId, { distributionManager: !!enabled });
+      if (res.success) {
+        setToast({
+          open: true,
+          message: enabled ? '유통지원 권한을 부여했습니다.' : '유통지원 권한을 취소했습니다.',
+          type: 'success'
+        });
+        setUsers(prev => prev.map(u => String(u.memberId || u.id || '') === String(userId) ? { ...u, distributionManager: !!enabled } : u));
+        if (selectedUser && getSelectedUserKey() === String(userId)) {
+          setSelectedUser(prev => ({ ...prev, distributionManager: !!enabled }));
+        }
+        await loadData();
+      }
+    } catch (e) {
+      console.error('[AdminMembers] toggleDistributionManager error:', e);
       setToast({ open: true, message: '권한 변경에 실패했습니다.', type: 'error' });
     }
   };
@@ -708,11 +734,23 @@ export default function AdminMembers() {
                   <input 
                     type="checkbox" 
                     checked={!!selectedUser.supplyManager} 
-                    onChange={(e) => toggleSupplyManager(selectedUser.id, e.target.checked)}
+                    onChange={(e) => toggleSupplyManager(selectedUser.memberId || selectedUser.id, e.target.checked)}
                     style={{ cursor: 'pointer' }}
                   />
                   <span style={{ fontSize: 12, opacity: 0.7 }}>
                     {selectedUser.supplyManager ? '✓ 권한 있음' : '권한 없음'}
+                  </span>
+                </div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                  <span style={{ opacity: 0.6 }}>유통지원 권한:</span>
+                  <input
+                    type="checkbox"
+                    checked={!!selectedUser.distributionManager}
+                    onChange={(e) => toggleDistributionManager(selectedUser.memberId || selectedUser.id, e.target.checked)}
+                    style={{ cursor: 'pointer' }}
+                  />
+                  <span style={{ fontSize: 12, opacity: 0.7 }}>
+                    {selectedUser.distributionManager ? '✓ 권한 있음' : '권한 없음'}
                   </span>
                 </div>
               </div>

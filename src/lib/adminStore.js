@@ -1244,6 +1244,7 @@ export const updateUser = async (id, data) => {
         status: (serverMember.status || '').toUpperCase(),
         role: serverMember.role || '',
         supplyManager: serverMember.supplyManager !== undefined ? serverMember.supplyManager : (serverMember.supply_manager !== undefined ? !!serverMember.supply_manager : false),
+        distributionManager: serverMember.distributionManager !== undefined ? serverMember.distributionManager : (serverMember.distribution_manager !== undefined ? !!serverMember.distribution_manager : false),
         memo: serverMember.memo || '',
         updatedAt: serverMember.updatedAt || serverMember.updated_at || new Date().toISOString(),
         createdAt: serverMember.createdAt || serverMember.created_at || new Date().toISOString(),
@@ -1270,7 +1271,8 @@ export const updateUser = async (id, data) => {
             ...auth, 
             ...data, 
             role: serverMember.role || auth.role,
-            supplyManager: serverMember.supplyManager !== undefined ? serverMember.supplyManager : (serverMember.supply_manager !== undefined ? !!serverMember.supply_manager : auth.supplyManager)
+            supplyManager: serverMember.supplyManager !== undefined ? serverMember.supplyManager : (serverMember.supply_manager !== undefined ? !!serverMember.supply_manager : auth.supplyManager),
+            distributionManager: serverMember.distributionManager !== undefined ? serverMember.distributionManager : (serverMember.distribution_manager !== undefined ? !!serverMember.distribution_manager : auth.distributionManager)
           };
           localStorage.setItem('su_auth_v2', JSON.stringify(updatedAuth));
         }

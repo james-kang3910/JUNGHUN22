@@ -91,7 +91,7 @@ export default function LiveBroadcastPlayer() {
         }}
         autoPlay
         playsInline
-        muted
+        controls
       />
     </div>
   );

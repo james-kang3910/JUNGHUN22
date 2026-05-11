@@ -17,6 +17,12 @@ const multer = require('multer');
 const sharp = require('sharp');
 const logger = require('./logger');
 const bcrypt = require('bcryptjs');
+const webpush = require('web-push');
+
+// VAPID keys for push notifications
+const VAPID_PUBLIC_KEY = process.env.VAPID_PUBLIC_KEY || 'BI_dbWUHjVwx8YgYtC-HqutXd-ENqCfKiZrM1LC3FdRRdMAoGCr4OR7xYYXolpCnL66IjoN1c3VQAEJtaBnoUTk';
+const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY || 'wz6mVKS2trEKnHMCUN6UfumWYojwCZLF8Rcy_0cOk2Y';
+webpush.setVapidDetails('mailto:admin@smi.ceo', VAPID_PUBLIC_KEY, VAPID_PRIVATE_KEY);
 
 // Environment variables
 const NODE_ENV = process.env.NODE_ENV || 'development';
@@ -329,6 +335,7 @@ function normalizeMember(row) {
     id: row.id || row.memberId || row.member_id,
     memberId: row.memberId || row.member_id,
     supplyManager: row.supplyManager !== undefined ? row.supplyManager : row.supply_manager,
+    distributionManager: row.distributionManager !== undefined ? row.distributionManager : row.distribution_manager,
     sdMark: row.sdMark !== undefined ? row.sdMark : row.sd_mark,
     regionId: row.regionId || row.region_id,
     districtId: row.districtId || row.district_id || null,
@@ -515,6 +522,7 @@ async function initDatabase() {
         await db.run(`ALTER TABLE members ADD COLUMN IF NOT EXISTS links JSONB`);
         await db.run(`ALTER TABLE members ADD COLUMN IF NOT EXISTS card_public BOOLEAN DEFAULT false`);
         await db.run(`ALTER TABLE members ADD COLUMN IF NOT EXISTS supply_manager BOOLEAN DEFAULT false`);
+        await db.run(`ALTER TABLE members ADD COLUMN IF NOT EXISTS distribution_manager BOOLEAN DEFAULT false`);
         await db.run(`ALTER TABLE members ADD COLUMN IF NOT EXISTS sd_mark INTEGER`);
         await db.run(`ALTER TABLE members ADD COLUMN IF NOT EXISTS password_hash TEXT`);
           await db.run(`ALTER TABLE members ADD COLUMN IF NOT EXISTS must_change_password BOOLEAN DEFAULT false`);
@@ -617,6 +625,9 @@ async function initDatabase() {
       } catch (e) {}
       try {
         await db.run(`ALTER TABLE members ADD COLUMN supplyManager INTEGER DEFAULT 0`);
+      } catch (e) {}
+      try {
+        await db.run(`ALTER TABLE members ADD COLUMN distributionManager INTEGER DEFAULT 0`);
       } catch (e) {}
       try {
         await db.run(`ALTER TABLE members ADD COLUMN password TEXT`);
@@ -1599,7 +1610,134 @@ async function initDatabase() {
     } catch (e) {
       logger.error('shop_payout_requests table init error:', e);
     }
+
+    // ── Reservations table ──
+    try {
+      if (USE_POSTGRES) {
+        await db.run(`
+          CREATE TABLE IF NOT EXISTS reservations (
+            reservation_id VARCHAR(255) PRIMARY KEY,
+            shop_id VARCHAR(255) NOT NULL,
+            member_id INTEGER NOT NULL,
+            reserved_date DATE NOT NULL,
+            reserved_time VARCHAR(10) NOT NULL,
+            service_name VARCHAR(200),
+            number_of_people INTEGER DEFAULT 1,
+            guest_name VARCHAR(100),
+            guest_phone VARCHAR(30),
+            notes TEXT,
+            status VARCHAR(20) DEFAULT 'pending',
+            reject_reason TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+          )
+        `);
+        await db.run(`CREATE INDEX IF NOT EXISTS idx_reservations_shop ON reservations(shop_id, reserved_date DESC)`);
+        await db.run(`CREATE INDEX IF NOT EXISTS idx_reservations_member ON reservations(member_id, created_at DESC)`);
+      } else {
+        await db.run(`
+          CREATE TABLE IF NOT EXISTS reservations (
+            reservation_id TEXT PRIMARY KEY,
+            shop_id TEXT NOT NULL,
+            member_id INTEGER NOT NULL,
+            reserved_date TEXT NOT NULL,
+            reserved_time TEXT NOT NULL,
+            service_name TEXT,
+            number_of_people INTEGER DEFAULT 1,
+            guest_name TEXT,
+            guest_phone TEXT,
+            notes TEXT,
+            status TEXT DEFAULT 'pending',
+            reject_reason TEXT,
+            created_at TEXT,
+            updated_at TEXT
+          )
+        `);
+      }
+      logger.info('reservations table ensured');
+    } catch (e) {
+      logger.error('reservations table init error:', e);
+    }
+
+    // ── Push subscriptions table ──
+    try {
+      if (USE_POSTGRES) {
+        await db.run(`
+          CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id SERIAL PRIMARY KEY,
+            member_id INTEGER NOT NULL,
+            endpoint TEXT NOT NULL,
+            auth_key TEXT,
+            p256dh_key TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(member_id, endpoint)
+          )
+        `);
+        await db.run(`CREATE INDEX IF NOT EXISTS idx_push_member ON push_subscriptions(member_id)`);
+      } else {
+        await db.run(`
+          CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            member_id INTEGER NOT NULL,
+            endpoint TEXT NOT NULL,
+            auth_key TEXT,
+            p256dh_key TEXT,
+            created_at TEXT
+          )
+        `);
+      }
+      logger.info('push_subscriptions table ensured');
+    } catch (e) {
+      logger.error('push_subscriptions table init error:', e);
+    }
+
     // Ensure broadcasts table exists
+        // Ensure dist_payout_requests table exists (for distribution seller payouts)
+        try {
+          if (USE_POSTGRES) {
+            await db.run(`
+              CREATE TABLE IF NOT EXISTS dist_payout_requests (
+                id SERIAL PRIMARY KEY,
+                seller_id VARCHAR(255) NOT NULL,
+                seller_name TEXT,
+                amount NUMERIC(12,2) NOT NULL DEFAULT 0,
+                bank_name VARCHAR(100),
+                account_number VARCHAR(100),
+                depositor_name VARCHAR(100),
+                memo TEXT,
+                status VARCHAR(20) DEFAULT 'PENDING',
+                requested_at TIMESTAMPTZ DEFAULT NOW(),
+                handled_at TIMESTAMPTZ,
+                handled_by TEXT,
+                reject_reason TEXT
+              )
+            `);
+            await db.run(`CREATE INDEX IF NOT EXISTS idx_dist_payout_seller ON dist_payout_requests(seller_id, requested_at DESC)`);
+          } else {
+            await db.run(`
+              CREATE TABLE IF NOT EXISTS dist_payout_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                seller_id TEXT NOT NULL,
+                seller_name TEXT,
+                amount REAL NOT NULL DEFAULT 0,
+                bank_name TEXT,
+                account_number TEXT,
+                depositor_name TEXT,
+                memo TEXT,
+                status TEXT DEFAULT 'PENDING',
+                requested_at TEXT,
+                handled_at TEXT,
+                handled_by TEXT,
+                reject_reason TEXT
+              )
+            `);
+            await db.run(`CREATE INDEX IF NOT EXISTS idx_dist_payout_seller ON dist_payout_requests(seller_id)`);
+          }
+          logger.info('dist_payout_requests table ensured');
+        } catch (e) {
+          logger.error('dist_payout_requests table init error:', e);
+        }
+        // Ensure broadcasts table exists
     try {
       if (USE_POSTGRES) {
         await db.run(`
@@ -2342,6 +2480,15 @@ async function initDatabase() {
       try { await db.run(`ALTER TABLE supply_requests ADD COLUMN IF NOT EXISTS message TEXT`); } catch (e) {}
       try { await db.run(`ALTER TABLE supply_requests ADD COLUMN IF NOT EXISTS item_name TEXT`); } catch (e) {}
       try { await db.run(`ALTER TABLE supply_requests ADD COLUMN IF NOT EXISTS manager_name TEXT`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN IF NOT EXISTS request_type VARCHAR(30) DEFAULT 'supply'`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN IF NOT EXISTS order_status VARCHAR(40)`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN IF NOT EXISTS receive_method VARCHAR(30)`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN IF NOT EXISTS payment_reference_id VARCHAR(120)`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN IF NOT EXISTS payment_amount INTEGER DEFAULT 0`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN IF NOT EXISTS buyer_confirmed_at TIMESTAMPTZ`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN IF NOT EXISTS cancelled_at TIMESTAMPTZ`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN IF NOT EXISTS return_requested_at TIMESTAMPTZ`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN IF NOT EXISTS returned_at TIMESTAMPTZ`); } catch (e) {}
       // ✨ supply_item_id 컬럼 타입 수정: INTEGER → TEXT (FK 제약 먼저 DROP 후 변환)
       // 케이스1: FK 제약이 TYPE 변경을 막으므로 먼저 DROP
       try { await db.run(`ALTER TABLE supply_requests DROP CONSTRAINT IF EXISTS supply_requests_supply_item_id_fkey`); } catch (e) {}
@@ -2358,6 +2505,25 @@ async function initDatabase() {
         logger.info('✅ supply_requests 타임스탬프 컬럼 타입 변경 완료');
       } catch (e) {
         logger.warn('⚠️  supply_requests 타임스탬프 변경 실패 (이미 변경되었거나 권한 없음):', e.message);
+      }
+
+      // ✨ 기존 유통 주문 payment_amount 복구 마이그레이션
+      // Phase 8 이전에 생성된 distribution 주문은 payment_amount=0으로 저장됨 → supplies.price 기반 복구
+      try {
+        const fixResult = await db.run(`
+          UPDATE supply_requests sr
+          SET payment_amount = COALESCE(sr.quantity, 1) * COALESCE(s.price, 0)
+          FROM supplies s
+          WHERE sr.supply_item_id = s.supply_id
+            AND COALESCE(sr.request_type, 'supply') = 'distribution'
+            AND COALESCE(sr.payment_amount, 0) = 0
+            AND COALESCE(s.price, 0) > 0
+        `);
+        if (fixResult && fixResult.rowCount > 0) {
+          logger.info(`✅ 기존 유통 주문 ${fixResult.rowCount}건 payment_amount 복구 완료`);
+        }
+      } catch (e) {
+        logger.warn('⚠️  기존 유통 주문 payment_amount 복구 실패:', e.message);
       }
       
       logger.info('PostgreSQL supply support tables ensured');
@@ -2396,6 +2562,15 @@ async function initDatabase() {
       try { await db.run(`ALTER TABLE supply_requests ADD COLUMN quantity INTEGER`); } catch (e) {}
       try { await db.run(`ALTER TABLE supply_requests ADD COLUMN message TEXT`); } catch (e) {}
       try { await db.run(`ALTER TABLE supply_requests ADD COLUMN completedAt TEXT`); } catch (e) {} // ✨ ADD: 완료 시각 기록
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN requestType TEXT DEFAULT 'supply'`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN orderStatus TEXT`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN receiveMethod TEXT`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN paymentReferenceId TEXT`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN paymentAmount INTEGER DEFAULT 0`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN buyerConfirmedAt TEXT`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN cancelledAt TEXT`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN returnRequestedAt TEXT`); } catch (e) {}
+      try { await db.run(`ALTER TABLE supply_requests ADD COLUMN returnedAt TEXT`); } catch (e) {}
       await db.run(`CREATE INDEX IF NOT EXISTS idx_supply_requests_item ON supply_requests(supplyItemId)`);
       await db.run(`CREATE INDEX IF NOT EXISTS idx_supply_requests_requester ON supply_requests(requesterId)`);
       await db.run(`CREATE INDEX IF NOT EXISTS idx_supply_requests_status ON supply_requests(status)`);
@@ -3133,8 +3308,8 @@ try {
 app.get('/api/members', async (req, res) => {
   try {
     const query = USE_POSTGRES 
-      ? 'SELECT member_id, email, name, phone, status, role, supply_manager, sd_mark, memo, region_id, created_at, updated_at FROM members ORDER BY created_at DESC'
-      : 'SELECT memberId, email, name, phone, status, role, supplyManager, sdMark, memo, regionId, createdAt, updatedAt FROM members';
+      ? 'SELECT member_id, email, name, phone, status, role, supply_manager, distribution_manager, sd_mark, memo, region_id, created_at, updated_at FROM members ORDER BY created_at DESC'
+      : 'SELECT memberId, email, name, phone, status, role, supplyManager, distributionManager, sdMark, memo, regionId, createdAt, updatedAt FROM members';
     const rows = await db.query(query);
     return jsonOk(res, { members: normalizeMembers(rows) });
   } catch (err) {
@@ -3256,6 +3431,9 @@ app.put('/api/members/:id', async (req, res) => {
       const supplyManager = (body.supplyManager !== undefined || body.supply_manager !== undefined)
         ? !!(body.supplyManager !== undefined ? body.supplyManager : body.supply_manager)
         : false;
+      const distributionManager = (body.distributionManager !== undefined || body.distribution_manager !== undefined)
+        ? !!(body.distributionManager !== undefined ? body.distributionManager : body.distribution_manager)
+        : false;
 
       const rawPasswordHash = body.passwordHash !== undefined ? body.passwordHash : body.password_hash;
       const passwordHash = rawPasswordHash ? String(rawPasswordHash) : null;
@@ -3266,8 +3444,8 @@ app.put('/api/members/:id', async (req, res) => {
         : Math.max(0, Number(rawSdMark) || 0) || null;
 
       const query = `
-        INSERT INTO members(member_id, email, name, phone, password_hash, status, role, supply_manager, sd_mark, memo, created_at, updated_at)
-        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        INSERT INTO members(member_id, email, name, phone, password_hash, status, role, supply_manager, distribution_manager, sd_mark, memo, created_at, updated_at)
+        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
         ON CONFLICT(member_id)
         DO UPDATE SET
           email = COALESCE(EXCLUDED.email, members.email),
@@ -3276,10 +3454,11 @@ app.put('/api/members/:id', async (req, res) => {
           password_hash = COALESCE(EXCLUDED.password_hash, members.password_hash),
           status = COALESCE(EXCLUDED.status, members.status),
           supply_manager = COALESCE(EXCLUDED.supply_manager, members.supply_manager),
+          distribution_manager = COALESCE(EXCLUDED.distribution_manager, members.distribution_manager),
           sd_mark = COALESCE(EXCLUDED.sd_mark, members.sd_mark),
           memo = COALESCE(EXCLUDED.memo, members.memo),
           updated_at = EXCLUDED.updated_at
-        RETURNING member_id, email, name, phone, status, role, supply_manager, sd_mark, memo, created_at, updated_at
+        RETURNING member_id, email, name, phone, status, role, supply_manager, distribution_manager, sd_mark, memo, created_at, updated_at
       `;
       const row = await db.get(query, [
         id,
@@ -3290,6 +3469,7 @@ app.put('/api/members/:id', async (req, res) => {
         status,
         'USER', // role은 INSERT 시 기본값 USER만 허용; 기존 row는 DO UPDATE에서 role 제외로 보존
         supplyManager,
+        distributionManager,
         sdMark,
         body.memo || null,
         now,
@@ -3306,6 +3486,9 @@ app.put('/api/members/:id', async (req, res) => {
       const supplyManager = (body.supplyManager !== undefined || body.supply_manager !== undefined)
         ? ((body.supplyManager !== undefined ? body.supplyManager : body.supply_manager) ? 1 : 0)
         : 0;
+      const distributionManager = (body.distributionManager !== undefined || body.distribution_manager !== undefined)
+        ? ((body.distributionManager !== undefined ? body.distributionManager : body.distribution_manager) ? 1 : 0)
+        : 0;
       const rawSdMark = body.sdMark !== undefined ? body.sdMark : body.sd_mark;
       const sdMark = rawSdMark === '' || rawSdMark === null || rawSdMark === undefined
         ? null
@@ -3316,8 +3499,8 @@ app.put('/api/members/:id', async (req, res) => {
       const regionId = body.regionId || body.region_id || null;
       
       const query = `
-        INSERT INTO members(memberId, name, email, phone, status, role, supplyManager, sdMark, memo, password, passwordHash, regionId, createdAt, updatedAt)
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO members(memberId, name, email, phone, status, role, supplyManager, distributionManager, sdMark, memo, password, passwordHash, regionId, createdAt, updatedAt)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `;
       await db.run(query, [
         id,
@@ -3327,6 +3510,7 @@ app.put('/api/members/:id', async (req, res) => {
         status,
         role,
         supplyManager,
+        distributionManager,
         sdMark,
         body.memo || '',
         body.password || '',
@@ -3371,6 +3555,11 @@ app.put('/api/members/:id', async (req, res) => {
     if (body.supplyManager !== undefined || body.supply_manager !== undefined) {
       const val = body.supplyManager !== undefined ? body.supplyManager : body.supply_manager;
       sets.push('supplyManager = ?');
+      params.push(val ? 1 : 0);
+    }
+    if (body.distributionManager !== undefined || body.distribution_manager !== undefined) {
+      const val = body.distributionManager !== undefined ? body.distributionManager : body.distribution_manager;
+      sets.push('distributionManager = ?');
       params.push(val ? 1 : 0);
     }
     sets.push('updatedAt = ?');
@@ -3423,9 +3612,14 @@ app.patch('/api/members/:id', async (req, res) => {
         fields.push(`supply_manager=$${idx++}`); 
         values.push(!!val); 
       }
+      if (updates.distributionManager !== undefined || updates.distribution_manager !== undefined) {
+        const val = updates.distributionManager !== undefined ? updates.distributionManager : updates.distribution_manager;
+        fields.push(`distribution_manager=$${idx++}`);
+        values.push(!!val);
+      }
       if (fields.length === 0) return jsonFail(res, 400, 'no fields to update');
       fields.push(`updated_at=$${idx++}`); values.push(now);
-      const query = `UPDATE members SET ${fields.join(', ')} WHERE member_id = $${idx} RETURNING member_id, email, name, phone, address, status, role, supply_manager, sd_mark, region_id, district_id, memo, created_at, updated_at`;
+      const query = `UPDATE members SET ${fields.join(', ')} WHERE member_id = $${idx} RETURNING member_id, email, name, phone, address, status, role, supply_manager, distribution_manager, sd_mark, region_id, district_id, memo, created_at, updated_at`;
       values.push(id);
       logger.info('[PATCH /api/members/:id][sdMark] incoming updates', { id, updates });
       logSQL('UPDATE', '/api/members/:id', query, values);
@@ -3463,6 +3657,11 @@ app.patch('/api/members/:id', async (req, res) => {
         const val = updates.supplyManager !== undefined ? updates.supplyManager : updates.supply_manager;
         sets.push('supplyManager = ?'); 
         params.push(val ? 1 : 0); 
+      }
+      if (updates.distributionManager !== undefined || updates.distribution_manager !== undefined) {
+        const val = updates.distributionManager !== undefined ? updates.distributionManager : updates.distribution_manager;
+        sets.push('distributionManager = ?');
+        params.push(val ? 1 : 0);
       }
       if (sets.length === 0) return jsonFail(res, 400, 'no fields to update');
       sets.push('updatedAt = ?'); params.push(now);
@@ -3921,6 +4120,7 @@ app.get('/api/auth/me', async (req, res) => {
         status: member.status,
         role: member.role,
         supplyManager: !!member.supply_manager,
+        distributionManager: !!member.distribution_manager,
         regionId: member.region_id,
         createdAt: member.created_at,
         updatedAt: member.updated_at,
@@ -3933,6 +4133,7 @@ app.get('/api/auth/me', async (req, res) => {
         status: member.status,
         role: member.role,
         supplyManager: !!member.supplyManager,
+        distributionManager: !!member.distributionManager,
         regionId: member.regionId,
         createdAt: member.createdAt,
         updatedAt: member.updatedAt,
@@ -13917,19 +14118,21 @@ app.post('/api/points/pay', requireAuth, async (req, res) => {
     
     const now = new Date().toISOString();
     const description = `상점 ${storeId} 결제`;
+    const referenceId = String(clientNonce || storeId || '').trim();
+    const referenceType = referenceId.startsWith('DIST_ORDER_') ? 'DISTRIBUTION_ORDER' : 'STORE';
     
     // Deduct points (negative amount)
     if (USE_POSTGRES) {
       await db.run(
         `INSERT INTO point_ledger(member_id, amount, type, description, reference_id, reference_type, status, created_at)
          VALUES($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [memberId, -Math.abs(Number(amount)), 'PAYMENT', description, storeId, 'STORE', 'active', now]
+        [memberId, -Math.abs(Number(amount)), 'PAYMENT', description, referenceId, referenceType, 'active', now]
       );
     } else {
       await db.run(
         `INSERT INTO point_ledger(memberId, amount, type, description, referenceId, referenceType, status, createdAt)
          VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-        [memberId, -Math.abs(Number(amount)), 'PAYMENT', description, storeId, 'STORE', 'active', now]
+        [memberId, -Math.abs(Number(amount)), 'PAYMENT', description, referenceId, referenceType, 'active', now]
       );
     }
     
@@ -16845,6 +17048,11 @@ app.post('/api/supply-requests', async (req, res) => {
     const messageRaw = body.message;
     const requesterNameRaw = body.requesterName;
     const requesterContactRaw = body.requesterContact;
+    const requestTypeRaw = body.requestType;
+    const orderStatusRaw = body.orderStatus;
+    const receiveMethodRaw = body.receiveMethod;
+    const paymentReferenceIdRaw = body.paymentReferenceId;
+    const paymentAmountRaw = body.paymentAmount;
 
     // ★ FIX Issue #3: supplyId is TEXT, not NUMBER
     const supplyItemId = String(supplyIdRaw || '').trim();
@@ -16884,22 +17092,88 @@ app.post('/api/supply-requests', async (req, res) => {
     const requesterName = requesterNameRaw ? String(requesterNameRaw).trim() : null;
     const requesterContact = requesterContactRaw ? String(requesterContactRaw).trim() : null;
     const message = messageRaw ? String(messageRaw).trim() : null;
+    const requestType = String(requestTypeRaw || 'supply').trim().toLowerCase() === 'distribution' ? 'distribution' : 'supply';
+    const receiveMethod = receiveMethodRaw ? String(receiveMethodRaw).trim().toLowerCase() : null;
+    const paymentReferenceId = paymentReferenceIdRaw ? String(paymentReferenceIdRaw).trim() : null;
+    const paymentAmount = Math.max(0, Math.trunc(Number(paymentAmountRaw || 0)));
+    const defaultOrderStatus = orderStatusRaw
+      ? String(orderStatusRaw).trim().toUpperCase()
+      : (requestType === 'distribution' ? 'ORDERED' : null);
+
+    const isPaidDistributionOrder = requestType === 'distribution' && paymentAmount > 0;
+
+    if (isPaidDistributionOrder) {
+      const token = getAuthToken(req);
+      if (!token) {
+        return res.status(401).json({ error: 'Unauthorized: 로그인이 필요합니다.' });
+      }
+      const session = USE_POSTGRES
+        ? await db.get('SELECT s.member_id FROM sessions s WHERE s.session_id = $1 AND s.status = $2', [token, 'ACTIVE'])
+        : await db.get('SELECT s.memberId FROM sessions s WHERE s.sessionId = ? AND s.status = ?', [token, 'ACTIVE']);
+      const authMemberId = String(session?.member_id || session?.memberId || '').trim();
+      if (!authMemberId) {
+        return res.status(401).json({ error: 'Unauthorized: 세션이 만료되었습니다.' });
+      }
+      if (authMemberId !== requesterId) {
+        return res.status(403).json({ error: '본인 계정으로만 유통 주문 결제가 가능합니다.' });
+      }
+      if (!paymentReferenceId) {
+        return res.status(400).json({ error: 'paymentReferenceId required for distribution payment' });
+      }
+
+      const duplicateOrder = USE_POSTGRES
+        ? await db.get(
+            `SELECT request_id FROM supply_requests WHERE payment_reference_id = $1 AND COALESCE(request_type, 'supply') = 'distribution' LIMIT 1`,
+            [paymentReferenceId]
+          )
+        : await db.get(
+            `SELECT requestId FROM supply_requests WHERE paymentReferenceId = ? AND COALESCE(requestType, 'supply') = 'distribution' LIMIT 1`,
+            [paymentReferenceId]
+          );
+      if (duplicateOrder) {
+        return res.status(409).json({ error: '이미 처리된 유통 주문입니다.' });
+      }
+
+      const balanceQuery = USE_POSTGRES
+        ? "SELECT COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 0 ELSE amount END), 0) as balance FROM point_ledger WHERE member_id = $1"
+        : "SELECT COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 0 ELSE amount END), 0) as balance FROM point_ledger WHERE memberId = ?";
+      const balanceRow = await db.get(balanceQuery, [authMemberId]);
+      const currentBalance = Number(balanceRow?.balance || 0);
+      if (currentBalance < paymentAmount) {
+        return res.status(400).json({ error: '포인트 잔액이 부족합니다.', required: paymentAmount, available: currentBalance });
+      }
+    }
 
     const now = new Date().toISOString();
     
     if (USE_POSTGRES) {
+      await db.run('BEGIN');
+      try {
+        if (isPaidDistributionOrder) {
+          await db.run(
+            `INSERT INTO point_ledger(member_id, amount, type, description, reference_id, reference_type, status, created_at)
+             VALUES($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [
+              requesterId,
+              -Math.abs(paymentAmount),
+              'PAYMENT',
+              `유통 상품 ${supplyTitle || supplyItemId} 결제`,
+              paymentReferenceId,
+              'DISTRIBUTION_ORDER',
+              'active',
+              now,
+            ]
+          );
+        }
+
       const query = `
-        INSERT INTO supply_requests (supply_item_id, requester_id, requester_name, requester_contact, quantity, message, item_name, manager_name, status, created_at, updated_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING', $9, $10)
-        RETURNING request_id, supply_item_id, requester_id, requester_name, requester_contact, quantity, message, item_name, manager_name, status, created_at, updated_at
-      `;
-      const params = [supplyItemId, requesterId, requesterName, requesterContact, quantity, message, supplyTitle, managerName, now, now];
-      const row = await db.get(query, params);
-      res.json({ ok: true, success: true, request: row });
-    } else {
-      const query = `
-        INSERT INTO supply_requests (supplyItemId, requesterId, requesterName, requesterContact, quantity, message, item_name, manager_name, status, createdAt, updatedAt)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)
+        INSERT INTO supply_requests (
+          supply_item_id, requester_id, requester_name, requester_contact, quantity, message,
+          item_name, manager_name, request_type, order_status, receive_method, payment_reference_id, payment_amount,
+          status, created_at, updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, 'PENDING', $14, $15)
+        RETURNING *
       `;
       const params = [
         supplyItemId,
@@ -16910,6 +17184,63 @@ app.post('/api/supply-requests', async (req, res) => {
         message,
         supplyTitle,
         managerName,
+        requestType,
+        defaultOrderStatus,
+        receiveMethod,
+        paymentReferenceId,
+        paymentAmount,
+        now,
+        now,
+      ];
+      const row = await db.get(query, params);
+      await db.run('COMMIT');
+      res.json({ ok: true, success: true, request: row });
+      } catch (error) {
+        await db.run('ROLLBACK');
+        throw error;
+      }
+    } else {
+      await db.run('BEGIN');
+      try {
+        if (isPaidDistributionOrder) {
+          await db.run(
+            `INSERT INTO point_ledger(memberId, amount, type, description, referenceId, referenceType, status, createdAt)
+             VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+              requesterId,
+              -Math.abs(paymentAmount),
+              'PAYMENT',
+              `유통 상품 ${supplyTitle || supplyItemId} 결제`,
+              paymentReferenceId,
+              'DISTRIBUTION_ORDER',
+              'active',
+              now,
+            ]
+          );
+        }
+
+      const query = `
+        INSERT INTO supply_requests (
+          supplyItemId, requesterId, requesterName, requesterContact, quantity, message,
+          item_name, manager_name, requestType, orderStatus, receiveMethod, paymentReferenceId, paymentAmount,
+          status, createdAt, updatedAt
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, ?)
+      `;
+      const params = [
+        supplyItemId,
+        requesterId,
+        requesterName,
+        requesterContact,
+        quantity,
+        message,
+        supplyTitle,
+        managerName,
+        requestType,
+        defaultOrderStatus,
+        receiveMethod,
+        paymentReferenceId,
+        paymentAmount,
         now,
         now,
       ];
@@ -16918,7 +17249,12 @@ app.post('/api/supply-requests', async (req, res) => {
       const request = requestId
         ? await db.get('SELECT * FROM supply_requests WHERE requestId = ?', [requestId])
         : null;
+      await db.run('COMMIT');
       res.json({ ok: true, success: true, request });
+      } catch (error) {
+        await db.run('ROLLBACK');
+        throw error;
+      }
     }
   } catch (err) {
     try {
@@ -16944,28 +17280,40 @@ app.get('/api/my/supply-requests/managed', async (req, res) => {
     );
     if (!session) return res.status(401).json({ error: 'Invalid session' });
     const managerId = USE_POSTGRES ? session.member_id : session.memberId;
+    const requestType = String(req.query?.requestType || 'supply').trim().toLowerCase();
+    const safeRequestType = requestType === 'distribution' ? 'distribution' : 'supply';
 
     let query, params;
     if (USE_POSTGRES) {
       query = `
-        SELECT sr.*, s.title as item_name, s.created_by as manager_id, m.name as applicant_name, m.phone as applicant_phone
+        SELECT sr.*, s.title as item_name, s.created_by as manager_id,
+               s.region_id as supply_region_id,
+               r.name as region_name,
+               m.name as applicant_name, m.phone as applicant_phone
         FROM supply_requests sr
         JOIN supplies s ON sr.supply_item_id = s.supply_id
+        LEFT JOIN regions r ON s.region_id = r.region_id
         LEFT JOIN members m ON sr.requester_id = CAST(m.member_id AS TEXT)
         WHERE s.created_by = $1
+          AND COALESCE(sr.request_type, 'supply') = $2
         ORDER BY sr.created_at DESC
       `;
-      params = [managerId];
+      params = [managerId, safeRequestType];
     } else {
       query = `
-        SELECT sr.*, s.title as item_name, s.createdBy as manager_id, m.name as applicant_name, m.phone as applicantPhone
+        SELECT sr.*, s.title as item_name, s.createdBy as manager_id,
+               s.regionId as supply_region_id,
+               r.name as region_name,
+               m.name as applicant_name, m.phone as applicantPhone
         FROM supply_requests sr
         JOIN supplies s ON sr.supplyItemId = s.supplyId
+        LEFT JOIN regions r ON s.regionId = r.regionId
         LEFT JOIN members m ON sr.requesterId = m.memberId
         WHERE s.createdBy = ?
+          AND COALESCE(sr.requestType, 'supply') = ?
         ORDER BY sr.createdAt DESC
       `;
-      params = [managerId];
+      params = [managerId, safeRequestType];
     }
 
     const rows = await db.all(query, params);
@@ -16979,9 +17327,20 @@ app.get('/api/my/supply-requests/managed', async (req, res) => {
       requesterName: r.applicant_name || r.requesterName || '(이름없음)', // Fallback
       requesterContact: r.requester_contact || r.applicant_phone || null,
       itemName: r.item_name,
+      regionId: r.supply_region_id || null,
+      regionName: r.region_name || null,
+      requestType: r.request_type || 'supply',
+      orderStatus: r.order_status || null,
+      receiveMethod: r.receive_method || null,
+      paymentReferenceId: r.payment_reference_id || null,
+      paymentAmount: Number(r.payment_amount || 0),
       status: r.status,
       message: r.message,
       createdAt: r.created_at,
+      buyerConfirmedAt: r.buyer_confirmed_at,
+      cancelledAt: r.cancelled_at,
+      returnRequestedAt: r.return_requested_at,
+      returnedAt: r.returned_at,
       completedAt: r.completed_at
     } : {
       id: r.requestId,
@@ -16990,15 +17349,231 @@ app.get('/api/my/supply-requests/managed', async (req, res) => {
       requesterName: r.applicant_name || r.requesterName || '(이름없음)', // Fallback
       requesterContact: r.requesterContact || r.applicantPhone || null,
       itemName: r.item_name,
+      regionId: r.supply_region_id || null,
+      regionName: r.region_name || null,
+      requestType: r.requestType || 'supply',
+      orderStatus: r.orderStatus || null,
+      receiveMethod: r.receiveMethod || null,
+      paymentReferenceId: r.paymentReferenceId || null,
+      paymentAmount: Number(r.paymentAmount || 0),
       status: r.status,
       message: r.message,
       createdAt: r.createdAt,
+      buyerConfirmedAt: r.buyerConfirmedAt,
+      cancelledAt: r.cancelledAt,
+      returnRequestedAt: r.returnRequestedAt,
+      returnedAt: r.returnedAt,
       completedAt: r.completedAt
     });
 
     res.json({ ok: true, requests: normalized });
   } catch (err) {
     logger.error('Error fetching managed supply requests:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PUT /api/supply-requests/:id/complete - 보급지원 신청 완료 처리 (Issue B-2)
+// ============================================================
+// Distribution Wallet API
+// ============================================================
+
+// GET /api/dist/wallet - 유통판매 포인트지갑 (잔액+영수증)
+app.get('/api/dist/wallet', async (req, res) => {
+  try {
+    const token = getAuthToken(req);
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+    const session = await db.get(
+      USE_POSTGRES ? 'SELECT member_id FROM sessions WHERE session_id = $1' : 'SELECT memberId FROM sessions WHERE sessionId = ?',
+      [token]
+    );
+    if (!session) return res.status(401).json({ error: 'Invalid session' });
+    const sellerId = USE_POSTGRES ? session.member_id : session.memberId;
+
+    // 누적 판매 대금: 결제 즉시 적립, 취소/반품 완료 시 차감
+    let totalEarned = 0;
+    if (USE_POSTGRES) {
+      const earnRow = await db.get(`
+        SELECT COALESCE(SUM(sr.payment_amount),0) AS total
+        FROM supply_requests sr
+        JOIN supplies s ON sr.supply_item_id = s.supply_id
+        WHERE s.created_by = $1
+          AND COALESCE(sr.request_type,'supply') = 'distribution'
+          AND COALESCE(sr.payment_amount, 0) > 0
+          AND UPPER(COALESCE(sr.order_status,'')) NOT IN ('CANCELLED', 'RETURNED')
+      `, [sellerId]);
+      totalEarned = Number(earnRow?.total || 0);
+    } else {
+      const earnRow = await db.get(`
+        SELECT COALESCE(SUM(sr.paymentAmount),0) AS total
+        FROM supply_requests sr
+        JOIN supplies s ON sr.supplyItemId = s.supplyId
+        WHERE s.createdBy = ?
+          AND COALESCE(sr.requestType,'supply') = 'distribution'
+          AND COALESCE(sr.paymentAmount, 0) > 0
+          AND UPPER(COALESCE(sr.orderStatus,'')) NOT IN ('CANCELLED', 'RETURNED')
+      `, [sellerId]);
+      totalEarned = Number(earnRow?.total || 0);
+    }
+
+    // 출금요청 합계: PENDING+APPROVED+PAID 상태
+    let totalWithdrawn = 0;
+    if (USE_POSTGRES) {
+      const wdRow = await db.get(
+        `SELECT COALESCE(SUM(amount),0) AS total FROM dist_payout_requests WHERE seller_id=$1 AND status IN ('PENDING','APPROVED','PAID')`,
+        [sellerId]
+      );
+      totalWithdrawn = Number(wdRow?.total || 0);
+    } else {
+      const wdRow = await db.get(
+        `SELECT COALESCE(SUM(amount),0) AS total FROM dist_payout_requests WHERE seller_id=? AND status IN ('PENDING','APPROVED','PAID')`,
+        [sellerId]
+      );
+      totalWithdrawn = Number(wdRow?.total || 0);
+    }
+
+    // 출금 이력
+    let withdrawals = [];
+    if (USE_POSTGRES) {
+      withdrawals = await db.all(
+        `SELECT * FROM dist_payout_requests WHERE seller_id=$1 ORDER BY requested_at DESC LIMIT 20`,
+        [sellerId]
+      );
+    } else {
+      withdrawals = await db.all(
+        `SELECT * FROM dist_payout_requests WHERE seller_id=? ORDER BY requested_at DESC LIMIT 20`,
+        [sellerId]
+      );
+    }
+
+    const available = totalEarned - totalWithdrawn;
+    res.json({ ok: true, totalEarned, totalWithdrawn, available, withdrawals });
+  } catch (err) {
+    logger.error('Error fetching dist wallet:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/dist/wallet/withdraw - 출금 요청
+app.post('/api/dist/wallet/withdraw', async (req, res) => {
+  try {
+    const token = getAuthToken(req);
+    if (!token) return res.status(401).json({ error: 'Unauthorized' });
+    const session = await db.get(
+      USE_POSTGRES ? 'SELECT member_id, member_id FROM sessions WHERE session_id = $1' : 'SELECT memberId FROM sessions WHERE sessionId = ?',
+      [token]
+    );
+    if (!session) return res.status(401).json({ error: 'Invalid session' });
+    const sellerId = USE_POSTGRES ? session.member_id : session.memberId;
+
+    const amount = Math.max(0, Math.trunc(Number(req.body?.amount || 0)));
+    if (!amount || amount <= 0) return res.status(400).json({ error: '출금 금액을 입력하세요.' });
+    const { bankName, accountNumber, depositorName, memo } = req.body || {};
+    if (!bankName || !accountNumber || !depositorName) return res.status(400).json({ error: '은행명, 계좌번호, 예금주명을 입력하세요.' });
+
+    // 가용 잔액 재확인: 결제 즉시 적립, 취소/반품 완료 시 차감
+    let totalEarned = 0, totalWithdrawn = 0;
+    if (USE_POSTGRES) {
+      const earnRow = await db.get(`
+        SELECT COALESCE(SUM(sr.payment_amount),0) AS total
+        FROM supply_requests sr
+        JOIN supplies s ON sr.supply_item_id = s.supply_id
+        WHERE s.created_by = $1
+          AND COALESCE(sr.request_type,'supply') = 'distribution'
+          AND COALESCE(sr.payment_amount, 0) > 0
+          AND UPPER(COALESCE(sr.order_status,'')) NOT IN ('CANCELLED', 'RETURNED')
+      `, [sellerId]);
+      totalEarned = Number(earnRow?.total || 0);
+      const wdRow = await db.get(
+        `SELECT COALESCE(SUM(amount),0) AS total FROM dist_payout_requests WHERE seller_id=$1 AND status IN ('PENDING','APPROVED','PAID')`,
+        [sellerId]
+      );
+      totalWithdrawn = Number(wdRow?.total || 0);
+    } else {
+      const earnRow = await db.get(`
+        SELECT COALESCE(SUM(sr.paymentAmount),0) AS total
+        FROM supply_requests sr
+        JOIN supplies s ON sr.supplyItemId = s.supplyId
+        WHERE s.createdBy = ?
+          AND COALESCE(sr.requestType,'supply') = 'distribution'
+          AND COALESCE(sr.paymentAmount, 0) > 0
+          AND UPPER(COALESCE(sr.orderStatus,'')) NOT IN ('CANCELLED', 'RETURNED')
+      `, [sellerId]);
+      totalEarned = Number(earnRow?.total || 0);
+      const wdRow = await db.get(
+        `SELECT COALESCE(SUM(amount),0) AS total FROM dist_payout_requests WHERE seller_id=? AND status IN ('PENDING','APPROVED','PAID')`,
+        [sellerId]
+      );
+      totalWithdrawn = Number(wdRow?.total || 0);
+    }
+    const available = totalEarned - totalWithdrawn;
+    if (amount > available) return res.status(400).json({ error: `출금 가능 잔액(${available}P)을 초과할 수 없습니다.` });
+
+    // 판매자 이름 조회
+    const memberRow = await db.get(
+      USE_POSTGRES ? 'SELECT name FROM members WHERE member_id=$1' : 'SELECT name FROM members WHERE memberId=?',
+      [sellerId]
+    );
+    const sellerName = memberRow?.name || '';
+    const now = new Date().toISOString();
+
+    if (USE_POSTGRES) {
+      await db.run(
+        `INSERT INTO dist_payout_requests(seller_id, seller_name, amount, bank_name, account_number, depositor_name, memo, status, requested_at) VALUES($1,$2,$3,$4,$5,$6,$7,'PENDING',$8)`,
+        [sellerId, sellerName, amount, bankName, accountNumber, depositorName, memo || null, now]
+      );
+    } else {
+      await db.run(
+        `INSERT INTO dist_payout_requests(seller_id, seller_name, amount, bank_name, account_number, depositor_name, memo, status, requested_at) VALUES(?,?,?,?,?,?,?,'PENDING',?)`,
+        [sellerId, sellerName, amount, bankName, accountNumber, depositorName, memo || null, now]
+      );
+    }
+    logger.info(`Dist withdrawal requested: sellerId=${sellerId}, amount=${amount}`);
+    res.json({ ok: true, message: '출금 요청이 접수되었습니다.' });
+  } catch (err) {
+    logger.error('Error requesting dist withdrawal:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/admin/dist-payouts - 관리자: 출금 요청 목록
+app.get('/api/admin/dist-payouts', async (req, res) => {
+  try {
+    const rows = USE_POSTGRES
+      ? await db.all(`SELECT * FROM dist_payout_requests ORDER BY requested_at DESC`)
+      : await db.all(`SELECT * FROM dist_payout_requests ORDER BY requested_at DESC`);
+    res.json({ ok: true, payouts: rows });
+  } catch (err) {
+    logger.error('Error fetching dist payouts (admin):', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/admin/dist-payouts/:id - 관리자: 출금 승인/거절/지급완료
+app.patch('/api/admin/dist-payouts/:id', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status, rejectReason } = req.body || {};
+    if (!['APPROVED', 'PAID', 'REJECTED'].includes(String(status || '').toUpperCase())) {
+      return res.status(400).json({ error: 'status는 APPROVED, PAID, REJECTED 중 하나여야 합니다.' });
+    }
+    const newStatus = String(status).toUpperCase();
+    const now = new Date().toISOString();
+    if (USE_POSTGRES) {
+      await db.run(
+        `UPDATE dist_payout_requests SET status=$1, handled_at=$2, reject_reason=$3 WHERE id=$4`,
+        [newStatus, now, rejectReason || null, id]
+      );
+    } else {
+      await db.run(
+        `UPDATE dist_payout_requests SET status=?, handled_at=?, reject_reason=? WHERE id=?`,
+        [newStatus, now, rejectReason || null, id]
+      );
+    }
+    logger.info(`Dist payout handled: id=${id}, status=${newStatus}`);
+    res.json({ ok: true, message: `출금 요청이 ${newStatus === 'APPROVED' ? '승인' : newStatus === 'PAID' ? '지급완료' : '거절'}되었습니다.` });
+  } catch (err) {
+    logger.error('Error handling dist payout:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -17054,6 +17629,8 @@ app.put('/api/supply-requests/:id/complete', async (req, res) => {
 app.get('/api/supply-requests', async (req, res) => {
   try {
     const { managerId, requesterId } = req.query;
+    const requestType = String(req.query?.requestType || '').trim().toLowerCase();
+    const hasRequestType = requestType === 'distribution' || requestType === 'supply';
     
     let query, params;
     if (USE_POSTGRES) {
@@ -17064,9 +17641,10 @@ app.get('/api/supply-requests', async (req, res) => {
           JOIN supplies s ON sr.supply_item_id = s.supply_id
           LEFT JOIN members m ON sr.requester_id = CAST(m.member_id AS TEXT)
           WHERE s.created_by = $1
+          ${hasRequestType ? "AND COALESCE(sr.request_type, 'supply') = $2" : ''}
           ORDER BY sr.created_at DESC
         `;
-        params = [managerId];
+        params = hasRequestType ? [managerId, requestType] : [managerId];
       } else if (requesterId) {
         query = `
           SELECT sr.*, s.title as item_name, s.created_by as manager_id, m.name as applicant_name, m.phone as applicant_phone
@@ -17074,9 +17652,10 @@ app.get('/api/supply-requests', async (req, res) => {
           LEFT JOIN supplies s ON sr.supply_item_id = s.supply_id
           LEFT JOIN members m ON sr.requester_id = CAST(m.member_id AS TEXT)
           WHERE sr.requester_id = $1
+          ${hasRequestType ? "AND COALESCE(sr.request_type, 'supply') = $2" : ''}
           ORDER BY sr.created_at DESC
         `;
-        params = [requesterId];
+        params = hasRequestType ? [requesterId, requestType] : [requesterId];
       } else {
         query = `
           SELECT sr.*,
@@ -17085,9 +17664,10 @@ app.get('/api/supply-requests', async (req, res) => {
           FROM supply_requests sr
           LEFT JOIN supplies s ON sr.supply_item_id = s.supply_id
           LEFT JOIN members m2 ON s.created_by = CAST(m2.member_id AS TEXT)
+          ${hasRequestType ? "WHERE COALESCE(sr.request_type, 'supply') = $1" : ''}
           ORDER BY sr.created_at DESC
         `;
-        params = [];
+        params = hasRequestType ? [requestType] : [];
       }
     } else {
       if (managerId) {
@@ -17096,26 +17676,29 @@ app.get('/api/supply-requests', async (req, res) => {
           FROM supply_requests sr
           JOIN supplies s ON sr.supplyItemId = s.supplyId
           WHERE s.createdBy = ?
+          ${hasRequestType ? "AND COALESCE(sr.requestType, 'supply') = ?" : ''}
           ORDER BY sr.createdAt DESC
         `;
-        params = [managerId];
+        params = hasRequestType ? [managerId, requestType] : [managerId];
       } else if (requesterId) {
         query = `
           SELECT sr.*, s.title as item_name, s.createdBy as manager_id
           FROM supply_requests sr
           LEFT JOIN supplies s ON sr.supplyItemId = s.supplyId
           WHERE sr.requesterId = ?
+          ${hasRequestType ? "AND COALESCE(sr.requestType, 'supply') = ?" : ''}
           ORDER BY sr.createdAt DESC
         `;
-        params = [requesterId];
+        params = hasRequestType ? [requesterId, requestType] : [requesterId];
       } else {
         query = `
           SELECT sr.*, s.title as item_name, s.createdBy as manager_id
           FROM supply_requests sr
           LEFT JOIN supplies s ON sr.supplyItemId = s.supplyId
+          ${hasRequestType ? "WHERE COALESCE(sr.requestType, 'supply') = ?" : ''}
           ORDER BY sr.createdAt DESC
         `;
-        params = [];
+        params = hasRequestType ? [requestType] : [];
       }
     }
     
@@ -17131,12 +17714,21 @@ app.get('/api/supply-requests', async (req, res) => {
       requesterContact: r.requester_contact || r.applicant_phone || '',
       itemName: r.item_name,
       managerName: r.manager_name || null,
+      requestType: r.request_type || 'supply',
+      orderStatus: r.order_status || null,
+      receiveMethod: r.receive_method || null,
+      paymentReferenceId: r.payment_reference_id || null,
+      paymentAmount: Number(r.payment_amount || 0),
       status: r.status,
       message: r.message,
       quantity: r.quantity,
       createdAt: r.created_at,
       updatedAt: r.updated_at,
       completedAt: r.completed_at,
+      buyerConfirmedAt: r.buyer_confirmed_at,
+      cancelledAt: r.cancelled_at,
+      returnRequestedAt: r.return_requested_at,
+      returnedAt: r.returned_at,
       managerName: r.manager_name || r.manager_id || ''
     } : {
       id: r.requestId,
@@ -17145,12 +17737,21 @@ app.get('/api/supply-requests', async (req, res) => {
       requesterName: r.requesterName || r.applicantName || '',
       requesterContact: r.requesterContact || r.applicantPhone || '',
       itemName: r.item_name,
+      requestType: r.requestType || 'supply',
+      orderStatus: r.orderStatus || null,
+      receiveMethod: r.receiveMethod || null,
+      paymentReferenceId: r.paymentReferenceId || null,
+      paymentAmount: Number(r.paymentAmount || 0),
       status: r.status,
       message: r.message,
       quantity: r.quantity,
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
       completedAt: r.completedAt,
+      buyerConfirmedAt: r.buyerConfirmedAt,
+      cancelledAt: r.cancelledAt,
+      returnRequestedAt: r.returnRequestedAt,
+      returnedAt: r.returnedAt,
       managerName: r.manager_name || r.manager_id || ''
     });
     
@@ -17166,33 +17767,191 @@ app.get('/api/supply-requests', async (req, res) => {
 app.patch('/api/supply-requests/:id', async (req, res) => {
   try {
     const id = req.params.id;
-    const { status } = req.body;
-    
-    if (!status) {
-      return res.status(400).json({ error: 'status is required' });
+    const {
+      status,
+      orderStatus,
+      buyerConfirmed,
+      requestType,
+      returnReason,
+      cancelReason,
+    } = req.body || {};
+
+    if (!status && !orderStatus && !buyerConfirmed && !requestType) {
+      return res.status(400).json({ error: 'status or orderStatus or buyerConfirmed is required' });
     }
     
     const now = new Date().toISOString();
+    const normalizedOrderStatus = orderStatus ? String(orderStatus).trim().toUpperCase() : null;
     
     if (USE_POSTGRES) {
-      const query = `
-        UPDATE supply_requests 
-        SET status = $1, updated_at = $2
-        WHERE request_id = $3
-        RETURNING *
-      `;
-      const row = await db.get(query, [status, now, id]);
-      res.json({ ok: true, request: row });
-    } else {
-      const query = `
-        UPDATE supply_requests 
-        SET status = ?, updatedAt = ?
-        WHERE requestId = ?
-      `;
-      await db.run(query, [status, now, id]);
-      const request = await db.get('SELECT * FROM supply_requests WHERE requestId = ?', [id]);
-      res.json({ ok: true, request });
+      const sets = ['updated_at = $1'];
+      const params = [now];
+      let idx = 2;
+
+      if (status) {
+        sets.push(`status = $${idx++}`);
+        params.push(status);
+      }
+      if (normalizedOrderStatus) {
+        sets.push(`order_status = $${idx++}`);
+        params.push(normalizedOrderStatus);
+      }
+      if (requestType) {
+        sets.push(`request_type = $${idx++}`);
+        params.push(String(requestType).trim().toLowerCase() === 'distribution' ? 'distribution' : 'supply');
+      }
+      if (buyerConfirmed) {
+        sets.push(`buyer_confirmed_at = $${idx++}`);
+        params.push(now);
+      }
+      if (normalizedOrderStatus === 'CANCELLED') {
+        sets.push(`cancelled_at = $${idx++}`);
+        params.push(now);
+      }
+      if (normalizedOrderStatus === 'RETURN_REQUESTED') {
+        sets.push(`return_requested_at = $${idx++}`);
+        params.push(now);
+      }
+      if (normalizedOrderStatus === 'RETURNED') {
+        sets.push(`returned_at = $${idx++}`);
+        params.push(now);
+      }
+      if (normalizedOrderStatus === 'COMPLETED') {
+        sets.push(`completed_at = $${idx++}`);
+        params.push(now);
+      }
+      if (buyerConfirmed && !normalizedOrderStatus) {
+        sets.push(`order_status = $${idx++}`);
+        params.push('COMPLETED');
+        sets.push(`completed_at = $${idx++}`);
+        params.push(now);
+      }
+
+      const query = `UPDATE supply_requests SET ${sets.join(', ')} WHERE request_id = $${idx} RETURNING *`;
+      params.push(id);
+      const row = await db.get(query, params);
+      if (!row) {
+        return res.status(404).json({ error: 'request not found' });
+      }
+
+      const rowRequestType = String(row.request_type || 'supply').toLowerCase();
+      const rowOrderStatus = String(row.order_status || '').toUpperCase();
+      const shouldCancelPoint = rowRequestType === 'distribution' && (rowOrderStatus === 'RETURNED' || rowOrderStatus === 'CANCELLED');
+
+      if (shouldCancelPoint && row.payment_reference_id) {
+        const targetLedger = await db.get(
+          `SELECT ledger_id, status
+           FROM point_ledger
+           WHERE member_id = $1 AND reference_id = $2 AND amount < 0
+           ORDER BY created_at DESC
+           LIMIT 1`,
+          [String(row.requester_id || ''), String(row.payment_reference_id || '')]
+        );
+        if (targetLedger && String(targetLedger.status || '').toLowerCase() !== 'cancelled') {
+          await db.run('UPDATE point_ledger SET status = $1 WHERE ledger_id = $2', ['cancelled', targetLedger.ledger_id]);
+          await db.run(
+            `INSERT INTO point_ledger(member_id, amount, type, description, reference_id, reference_type, status, created_at)
+             VALUES($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [
+              String(row.requester_id || ''),
+              0,
+              'CANCEL',
+              rowOrderStatus === 'RETURNED'
+                ? `유통 주문 반품 취소 처리${returnReason ? ` (${String(returnReason)})` : ''}`
+                : `유통 주문 취소 처리${cancelReason ? ` (${String(cancelReason)})` : ''}`,
+              String(targetLedger.ledger_id),
+              'DISTRIBUTION_CANCEL',
+              'active',
+              now,
+            ]
+          );
+        }
+      }
+
+      return res.json({ ok: true, request: row });
     }
+
+    const sets = ['updatedAt = ?'];
+    const params = [now];
+
+    if (status) {
+      sets.push('status = ?');
+      params.push(status);
+    }
+    if (normalizedOrderStatus) {
+      sets.push('orderStatus = ?');
+      params.push(normalizedOrderStatus);
+    }
+    if (requestType) {
+      sets.push('requestType = ?');
+      params.push(String(requestType).trim().toLowerCase() === 'distribution' ? 'distribution' : 'supply');
+    }
+    if (buyerConfirmed) {
+      sets.push('buyerConfirmedAt = ?');
+      params.push(now);
+    }
+    if (normalizedOrderStatus === 'CANCELLED') {
+      sets.push('cancelledAt = ?');
+      params.push(now);
+    }
+    if (normalizedOrderStatus === 'RETURN_REQUESTED') {
+      sets.push('returnRequestedAt = ?');
+      params.push(now);
+    }
+    if (normalizedOrderStatus === 'RETURNED') {
+      sets.push('returnedAt = ?');
+      params.push(now);
+    }
+    if (buyerConfirmed && !normalizedOrderStatus) {
+      sets.push('orderStatus = ?');
+      params.push('COMPLETED');
+      sets.push('completedAt = ?');
+      params.push(now);
+    }
+
+    const query = `UPDATE supply_requests SET ${sets.join(', ')} WHERE requestId = ?`;
+    params.push(id);
+    await db.run(query, params);
+    const request = await db.get('SELECT * FROM supply_requests WHERE requestId = ?', [id]);
+    if (!request) {
+      return res.status(404).json({ error: 'request not found' });
+    }
+
+    const rowRequestType = String(request.requestType || 'supply').toLowerCase();
+    const rowOrderStatus = String(request.orderStatus || '').toUpperCase();
+    const shouldCancelPoint = rowRequestType === 'distribution' && (rowOrderStatus === 'RETURNED' || rowOrderStatus === 'CANCELLED');
+
+    if (shouldCancelPoint && request.paymentReferenceId) {
+      const targetLedger = await db.get(
+        `SELECT ledgerId, status
+         FROM point_ledger
+         WHERE memberId = ? AND referenceId = ? AND amount < 0
+         ORDER BY createdAt DESC
+         LIMIT 1`,
+        [String(request.requesterId || ''), String(request.paymentReferenceId || '')]
+      );
+      if (targetLedger && String(targetLedger.status || '').toLowerCase() !== 'cancelled') {
+        await db.run('UPDATE point_ledger SET status = ? WHERE ledgerId = ?', ['cancelled', targetLedger.ledgerId]);
+        await db.run(
+          `INSERT INTO point_ledger(memberId, amount, type, description, referenceId, referenceType, status, createdAt)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+          [
+            String(request.requesterId || ''),
+            0,
+            'CANCEL',
+            rowOrderStatus === 'RETURNED'
+              ? `유통 주문 반품 취소 처리${returnReason ? ` (${String(returnReason)})` : ''}`
+              : `유통 주문 취소 처리${cancelReason ? ` (${String(cancelReason)})` : ''}`,
+            String(targetLedger.ledgerId),
+            'DISTRIBUTION_CANCEL',
+            'active',
+            now,
+          ]
+        );
+      }
+    }
+
+    res.json({ ok: true, request });
   } catch (err) {
     logger.error('Error updating supply request:', err);
     res.status(500).json({ error: err.message });
@@ -17670,6 +18429,249 @@ async function repairRatingData() {
     logger.error('[repairRatingData] error:', e.message);
   }
 }
+
+// ═══════════════════════════════════════════════════════
+// Push Subscription & Reservation APIs
+// ═══════════════════════════════════════════════════════
+
+// GET /api/push/vapid-key — 프론트에서 VAPID 공개키 조회
+app.get('/api/push/vapid-key', (req, res) => {
+  res.json({ publicKey: VAPID_PUBLIC_KEY });
+});
+
+// POST /api/push/subscribe — 푸시 구독 등록
+app.post('/api/push/subscribe', async (req, res) => {
+  try {
+    const memberId = req.headers['x-member-id'];
+    if (!memberId) return res.status(401).json({ error: '로그인이 필요합니다.' });
+    const { endpoint, keys } = req.body;
+    if (!endpoint || !keys?.auth || !keys?.p256dh) return res.status(400).json({ error: '구독 정보가 올바르지 않습니다.' });
+
+    if (USE_POSTGRES) {
+      await db.run(`INSERT INTO push_subscriptions(member_id, endpoint, auth_key, p256dh_key) VALUES($1,$2,$3,$4) ON CONFLICT(member_id, endpoint) DO UPDATE SET auth_key=EXCLUDED.auth_key, p256dh_key=EXCLUDED.p256dh_key`, [memberId, endpoint, keys.auth, keys.p256dh]);
+    } else {
+      await db.run(`INSERT OR REPLACE INTO push_subscriptions(member_id, endpoint, auth_key, p256dh_key, created_at) VALUES(?,?,?,?,datetime('now'))`, [memberId, endpoint, keys.auth, keys.p256dh]);
+    }
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error('push subscribe error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 푸시 전송 헬퍼
+async function sendPushToMember(memberId, payload) {
+  try {
+    const subs = await db.query(
+      USE_POSTGRES
+        ? 'SELECT endpoint, auth_key, p256dh_key FROM push_subscriptions WHERE member_id = $1'
+        : 'SELECT endpoint, auth_key, p256dh_key FROM push_subscriptions WHERE member_id = ?',
+      [memberId]
+    );
+    for (const sub of subs) {
+      try {
+        await webpush.sendNotification({
+          endpoint: sub.endpoint,
+          keys: { auth: sub.auth_key, p256dh: sub.p256dh_key }
+        }, JSON.stringify(payload));
+      } catch (e) {
+        if (e.statusCode === 410 || e.statusCode === 404) {
+          await db.run(
+            USE_POSTGRES ? 'DELETE FROM push_subscriptions WHERE endpoint = $1' : 'DELETE FROM push_subscriptions WHERE endpoint = ?',
+            [sub.endpoint]
+          );
+        }
+      }
+    }
+  } catch (err) {
+    logger.error('sendPushToMember error:', err);
+  }
+}
+
+// POST /api/shops/:shopId/reservations — 예약 생성
+app.post('/api/shops/:shopId/reservations', async (req, res) => {
+  try {
+    const memberId = req.headers['x-member-id'];
+    if (!memberId) return res.status(401).json({ error: '로그인이 필요합니다.' });
+    const shopId = req.params.shopId;
+    const { reservedDate, reservedTime, serviceName, numberOfPeople, guestName, guestPhone, notes } = req.body;
+    if (!reservedDate || !reservedTime) return res.status(400).json({ error: '날짜와 시간을 선택해주세요.' });
+
+    const reservationId = `rsv_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+
+    if (USE_POSTGRES) {
+      await db.run(`INSERT INTO reservations(reservation_id, shop_id, member_id, reserved_date, reserved_time, service_name, number_of_people, guest_name, guest_phone, notes) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [reservationId, shopId, memberId, reservedDate, reservedTime, serviceName || null, numberOfPeople || 1, guestName || null, guestPhone || null, notes || null]);
+    } else {
+      await db.run(`INSERT INTO reservations(reservation_id, shop_id, member_id, reserved_date, reserved_time, service_name, number_of_people, guest_name, guest_phone, notes, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))`,
+        [reservationId, shopId, memberId, reservedDate, reservedTime, serviceName || null, numberOfPeople || 1, guestName || null, guestPhone || null, notes || null]);
+    }
+
+    // 상점 주인에게 푸시 알림
+    const shopRows = await db.query(
+      USE_POSTGRES ? 'SELECT owner_id, name FROM shops WHERE shop_id = $1' : 'SELECT owner_id, name FROM shops WHERE shop_id = ?',
+      [shopId]
+    );
+    if (shopRows.length > 0) {
+      const ownerId = shopRows[0].owner_id;
+      await sendPushToMember(ownerId, {
+        title: '📅 새 예약이 도착했습니다!',
+        body: `${guestName || '고객'}님 | ${reservedDate} ${reservedTime}${serviceName ? ' | ' + serviceName : ''}`,
+        tag: 'reservation-new',
+        url: `/my?tab=reservations`
+      });
+    }
+
+    res.json({ ok: true, reservationId });
+  } catch (err) {
+    logger.error('create reservation error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/shops/:shopId/reservations — 상점의 예약 목록 (상점 주인용)
+app.get('/api/shops/:shopId/reservations', async (req, res) => {
+  try {
+    const shopId = req.params.shopId;
+    const rows = await db.query(
+      USE_POSTGRES
+        ? `SELECT r.*, m.name AS member_name, m.phone AS member_phone FROM reservations r LEFT JOIN members m ON r.member_id = m.member_id WHERE r.shop_id = $1 ORDER BY r.reserved_date DESC, r.reserved_time DESC`
+        : `SELECT r.*, m.name AS member_name FROM reservations r LEFT JOIN members m ON r.member_id = m.member_id WHERE r.shop_id = ? ORDER BY r.reserved_date DESC, r.reserved_time DESC`,
+      [shopId]
+    );
+    const normalized = rows.map(r => {
+      let rd = r.reserved_date;
+      if (rd instanceof Date) rd = rd.toISOString().slice(0, 10);
+      else if (typeof rd === 'string' && rd.length > 10) rd = rd.slice(0, 10);
+      return {
+        id: r.reservation_id,
+        shopId: r.shop_id,
+        memberId: r.member_id,
+        memberName: r.member_name || r.guest_name || '고객',
+        memberPhone: r.member_phone || r.guest_phone || '',
+        reservedDate: rd,
+        reservedTime: r.reserved_time,
+        serviceName: r.service_name,
+        numberOfPeople: r.number_of_people,
+        guestName: r.guest_name,
+        guestPhone: r.guest_phone,
+        notes: r.notes,
+        status: r.status,
+        rejectReason: r.reject_reason,
+        createdAt: r.created_at
+      };
+    });
+    res.json({ ok: true, reservations: normalized });
+  } catch (err) {
+    logger.error('get shop reservations error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/members/:memberId/reservations — 내 예약 목록
+app.get('/api/members/:memberId/reservations', async (req, res) => {
+  try {
+    const memberId = req.params.memberId;
+    const rows = await db.query(
+      USE_POSTGRES
+        ? `SELECT r.*, s.name AS shop_name FROM reservations r LEFT JOIN shops s ON r.shop_id = s.shop_id WHERE r.member_id = $1 ORDER BY r.reserved_date DESC, r.reserved_time DESC`
+        : `SELECT r.*, s.name AS shop_name FROM reservations r LEFT JOIN shops s ON r.shop_id = s.shop_id WHERE r.member_id = ? ORDER BY r.reserved_date DESC, r.reserved_time DESC`,
+      [memberId]
+    );
+    const normalized = rows.map(r => {
+      let rd = r.reserved_date;
+      if (rd instanceof Date) rd = rd.toISOString().slice(0, 10);
+      else if (typeof rd === 'string' && rd.length > 10) rd = rd.slice(0, 10);
+      return {
+        id: r.reservation_id,
+        shopId: r.shop_id,
+        shopName: r.shop_name || '상점',
+        reservedDate: rd,
+        reservedTime: r.reserved_time,
+        serviceName: r.service_name,
+        numberOfPeople: r.number_of_people,
+        guestName: r.guest_name,
+        guestPhone: r.guest_phone,
+        notes: r.notes,
+        status: r.status,
+        rejectReason: r.reject_reason,
+        createdAt: r.created_at
+      };
+    });
+    res.json({ ok: true, reservations: normalized });
+  } catch (err) {
+    logger.error('get member reservations error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/reservations/:id — 예약 승인/거절
+app.patch('/api/reservations/:id', async (req, res) => {
+  try {
+    const memberId = req.headers['x-member-id'];
+    if (!memberId) return res.status(401).json({ error: '로그인이 필요합니다.' });
+    const { status, rejectReason } = req.body;
+    if (!['confirmed', 'rejected', 'cancelled'].includes(status)) return res.status(400).json({ error: '올바르지 않은 상태값입니다.' });
+
+    const reservationId = req.params.id;
+    const rows = await db.query(
+      USE_POSTGRES ? 'SELECT * FROM reservations WHERE reservation_id = $1' : 'SELECT * FROM reservations WHERE reservation_id = ?',
+      [reservationId]
+    );
+    if (rows.length === 0) return res.status(404).json({ error: '예약을 찾을 수 없습니다.' });
+    const rsv = rows[0];
+
+    if (USE_POSTGRES) {
+      await db.run(
+        `UPDATE reservations SET status = $1, reject_reason = $2, updated_at = CURRENT_TIMESTAMP WHERE reservation_id = $3`,
+        [status, rejectReason || null, reservationId]
+      );
+    } else {
+      await db.run(
+        `UPDATE reservations SET status = ?, reject_reason = ?, updated_at = datetime('now') WHERE reservation_id = ?`,
+        [status, rejectReason || null, reservationId]
+      );
+    }
+
+    // 상점 이름 조회
+    const shopRows = await db.query(
+      USE_POSTGRES ? 'SELECT name FROM shops WHERE shop_id = $1' : 'SELECT name FROM shops WHERE shop_id = ?',
+      [rsv.shop_id]
+    );
+    const shopName = shopRows[0]?.name || '상점';
+
+    // 고객에게 푸시 알림
+    const statusLabel = status === 'confirmed' ? '확정' : status === 'rejected' ? '거절' : '취소';
+    await sendPushToMember(rsv.member_id, {
+      title: status === 'confirmed' ? '✅ 예약이 확정되었습니다!' : `❌ 예약이 ${statusLabel}되었습니다`,
+      body: `${shopName} | ${rsv.reserved_date} ${rsv.reserved_time}${rejectReason ? '\n사유: ' + rejectReason : ''}`,
+      tag: 'reservation-update',
+      url: `/my?tab=activity`
+    });
+
+    res.json({ ok: true, status });
+  } catch (err) {
+    logger.error('update reservation error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/reservations/:id — 예약 삭제
+app.delete('/api/reservations/:id', async (req, res) => {
+  try {
+    const memberId = req.headers['x-member-id'];
+    if (!memberId) return res.status(401).json({ error: '로그인이 필요합니다.' });
+    const reservationId = req.params.id;
+    await db.run(
+      USE_POSTGRES ? 'DELETE FROM reservations WHERE reservation_id = $1' : 'DELETE FROM reservations WHERE reservation_id = ?',
+      [reservationId]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error('delete reservation error:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
 
 // Initialize database before starting server
 async function startServer() {

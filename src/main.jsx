@@ -30,10 +30,8 @@ ReactDOM.createRoot(document.getElementById("root")).render(
   </React.StrictMode>
 );
 
-// Service worker registration: only attempt in production builds.
-// This import is dynamic so that the module (which performs registration side-effects)
-// is only loaded in production. The actual registration will call navigator.serviceWorker.register('/sw.js').
-if (import.meta.env && import.meta.env.PROD) {
+// Service worker registration: attempt in all environments (needed for push notifications)
+if ('serviceWorker' in navigator) {
   import('./registerSW.js').catch(err => {
     // swallow import/runtime failures — non-critical
     console.error('[SW] could not load register module:', err);

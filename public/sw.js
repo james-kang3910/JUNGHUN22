@@ -118,3 +118,45 @@ self.addEventListener('fetch', event => {
 
   // otherwise, default to network
 });
+
+// ═══ Push Notification Handler ═══
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data?.json() ?? {}; } catch (e) { data = { title: '알림', body: event.data?.text() || '' }; }
+
+  const options = {
+    body: data.body || '',
+    icon: '/pwa-192.png',
+    badge: '/pwa-192.png',
+    tag: data.tag || 'general',
+    renotify: true,
+    vibrate: [200, 100, 200],
+    data: { url: data.url || '/' }
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(data.title || '지역공유발전플랫폼', options).then(() => {
+      // 열린 페이지에 알림 전달 (예약 등 실시간 갱신용)
+      return self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(cls => {
+        cls.forEach(c => c.postMessage({ type: 'push-received', tag: data.tag || 'general' }));
+      });
+    })
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const url = event.notification.data?.url || '/';
+
+  event.waitUntil(
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+      for (const client of clientList) {
+        if (client.url.includes(self.location.origin) && 'focus' in client) {
+          client.navigate(url);
+          return client.focus();
+        }
+      }
+      return clients.openWindow(url);
+    })
+  );
+});

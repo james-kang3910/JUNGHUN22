@@ -252,6 +252,10 @@ export default function AdminPoints() {
   const [shopRequests, setShopRequests] = useState([]);
   const [payoutFilter, setPayoutFilter] = useState('PENDING');
 
+  // ★ 유통 지급요청 상태
+  const [distPayouts, setDistPayouts] = useState([]);
+  const [distPayoutFilter, setDistPayoutFilter] = useState('PENDING');
+
   const memberNameMap = useMemo(() => {
     const entries = members.map((member) => {
       const memberId = String(getMemberId(member) || '').trim();
@@ -457,7 +461,7 @@ export default function AdminPoints() {
     };
     doLoad();
     return () => { ac.abort(); };
-  }, [reloadKey, authReadyFlag]);
+  }, [reloadKey, authReadyFlag, selectedUser]);
 
   // ★ 상점 지급요청 SSOT 이벤트 리스닝 (서버 기반 재로드)
   useEffect(() => {
@@ -468,6 +472,63 @@ export default function AdminPoints() {
       window.removeEventListener('storage', loadShopPayoutRequests);
     };
   }, []);
+
+  // ★ 유통 지급요청 로더
+  const loadDistPayouts = async () => {
+    try {
+      const token = localStorage.getItem('adminToken') || '';
+      const res = await fetch('/api/admin/dist-payouts', {
+        headers: { 'Content-Type': 'application/json', 'x-admin-token': token }
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const reqs = data.payouts || [];
+      reqs.sort((a, b) => {
+        if (a.status === b.status) return new Date(b.requested_at) - new Date(a.requested_at);
+        if (a.status === 'PENDING') return -1;
+        if (b.status === 'PENDING') return 1;
+        return 0;
+      });
+      setDistPayouts(reqs);
+    } catch (e) {
+      console.error('[AdminPoints] Failed to load dist payouts:', e);
+      setDistPayouts([]);
+    }
+  };
+
+  useEffect(() => {
+    loadDistPayouts();
+  }, [reloadKey]);
+
+  useEffect(() => {
+    window.addEventListener('su:ssot:changed', loadDistPayouts);
+    return () => window.removeEventListener('su:ssot:changed', loadDistPayouts);
+  }, []);
+
+  // ★ 유통 지급 처리 핸들러
+  const handleDistPayoutAction = async (payoutId, action) => {
+    const label = action === 'PAID' ? '지급완료' : action === 'APPROVED' ? '승인' : '거절';
+    if (!window.confirm(`정말 ${label} 처리하시겠습니까?`)) return;
+    try {
+      const token = localStorage.getItem('adminToken') || '';
+      const res = await fetch(`/api/admin/dist-payouts/${payoutId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json', 'x-admin-token': token },
+        body: JSON.stringify({ status: action })
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      if (data.ok) {
+        showToast(data.message || `${label} 처리 완료`, 'success');
+        await loadDistPayouts();
+      } else {
+        throw new Error(data.error || `${label} 처리 실패`);
+      }
+    } catch (e) {
+      console.error('[AdminPoints] handleDistPayoutAction error:', e);
+      showToast('오류: ' + e.message, 'error');
+    }
+  };
 
 
   // 검색 결과: memberQuery로 members 필터링 (이름/이메일/전화번호)
@@ -827,6 +888,70 @@ export default function AdminPoints() {
         )}
       </div>
 
+      {/* ★ 유통 지급요청 섹션 */}
+      <div style={S.card}>
+        <h2 style={S.cardTitle}>🚚 유통 지급요청</h2>
+        <div style={{ display: 'flex', gap: 8, marginBottom: 12, alignItems: 'center', flexWrap: 'wrap' }}>
+          <button onClick={() => setDistPayoutFilter('PENDING')} style={{ ...S.btnSecondary, border: distPayoutFilter==='PENDING' ? 'none' : '1px solid rgba(255,255,255,0.2)', background: distPayoutFilter==='PENDING' ? 'rgba(168,85,247,0.2)' : 'rgba(255,255,255,0.06)', color: distPayoutFilter==='PENDING' ? '#fff' : 'rgba(255,255,255,0.8)' }}>대기</button>
+          <button onClick={() => setDistPayoutFilter('PAID')} style={{ ...S.btnSecondary, border: distPayoutFilter==='PAID' ? 'none' : '1px solid rgba(255,255,255,0.2)', background: distPayoutFilter==='PAID' ? 'rgba(168,85,247,0.2)' : 'rgba(255,255,255,0.06)', color: distPayoutFilter==='PAID' ? '#fff' : 'rgba(255,255,255,0.8)' }}>완료</button>
+          <button onClick={() => setDistPayoutFilter('ALL')} style={{ ...S.btnSecondary, border: distPayoutFilter==='ALL' ? 'none' : '1px solid rgba(255,255,255,0.2)', background: distPayoutFilter==='ALL' ? 'rgba(168,85,247,0.2)' : 'rgba(255,255,255,0.06)', color: distPayoutFilter==='ALL' ? '#fff' : 'rgba(255,255,255,0.8)' }}>전체</button>
+        </div>
+
+        {(!distPayouts || distPayouts.length === 0) ? (
+          <div style={S.emptyBox}>유통 지급요청이 없습니다.</div>
+        ) : (
+          <div style={{ overflowX: 'auto' }}>
+            <table style={S.table}>
+              <thead>
+                <tr>
+                  <th style={S.th}>판매자</th>
+                  <th style={S.th}>요청금액</th>
+                  <th style={S.th}>요청일</th>
+                  <th style={S.th}>계좌/예금주</th>
+                  <th style={S.th}>상태</th>
+                  <th style={S.th}>작업</th>
+                </tr>
+              </thead>
+              <tbody>
+                {distPayouts.filter(r => distPayoutFilter === 'ALL' ? true : r.status === distPayoutFilter).map(r => {
+                  const sellerName = memberNameMap.get(String(r.seller_id)) || r.seller_id || '(미상)';
+                  const statusLabel = r.status === 'PENDING' ? '대기' : r.status === 'APPROVED' ? '승인' : r.status === 'PAID' ? '지급완료' : r.status === 'REJECTED' ? '거절' : r.status;
+                  const statusStyle = r.status === 'PENDING'
+                    ? { background: 'rgba(250,204,21,0.12)', color: '#f59e0b' }
+                    : r.status === 'REJECTED'
+                    ? { background: 'rgba(239,68,68,0.12)', color: '#ef4444' }
+                    : { background: 'rgba(34,197,94,0.12)', color: '#10b981' };
+                  return (
+                    <tr key={r.id}>
+                      <td style={S.td}>{sellerName}</td>
+                      <td style={{ ...S.td, fontWeight: 700 }}>{Number(r.amount).toLocaleString()} P</td>
+                      <td style={S.td}>{formatDate(r.requested_at)}</td>
+                      <td style={S.td}>
+                        <div style={{ fontSize: 13 }}>{r.bank_name || '-'}</div>
+                        <div style={{ fontSize: 12, opacity: 0.85 }}>{r.account_number || '-'} / {r.depositor_name || '-'}</div>
+                      </td>
+                      <td style={S.td}>
+                        <span style={{ ...S.badge, ...statusStyle }}>{statusLabel}</span>
+                      </td>
+                      <td style={S.td}>
+                        {r.status === 'PENDING' ? (
+                          <div style={{ display: 'flex', gap: 4 }}>
+                            <button onClick={() => handleDistPayoutAction(r.id, 'PAID')} style={{ padding: '6px 10px', borderRadius: 6, background: 'linear-gradient(135deg,#10b981,#059669)', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>지급</button>
+                            <button onClick={() => handleDistPayoutAction(r.id, 'REJECTED')} style={{ padding: '6px 10px', borderRadius: 6, background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>거절</button>
+                          </div>
+                        ) : (
+                          <span style={{ color: 'rgba(255,255,255,0.6)' }}>-</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
       {/* 포인트 지급/차감 폼 */}
       <div style={S.card}>
         <h2 style={S.cardTitle}>💰 포인트 지급/차감</h2>
@@ -887,7 +1012,7 @@ export default function AdminPoints() {
                   >
                     <div>
                       <div style={{ fontWeight: 600, fontSize: 14 }}>{getMemberName(m)}</div>
-                      <div style={{ fontSize: 11, opacity: 0.5 }}>{m.email || m.phone || "-"}</div>
+                      <div style={{ fontSize: 11, opacity: 0.5 }}>{m.email || "-"} {m.phone ? ` | ${m.phone}` : ""}</div>
                     </div>
                     <div style={S.memberBalance}>{(memberBalances[getMemberId(m)] || 0).toLocaleString()}P</div>
                   </div>

@@ -3,6 +3,7 @@ import { useNavigate, useParams, useLocation } from "react-router-dom";
 import * as storageAdapter from "../lib/storageAdapter";
 import { register, unregister } from "../lib/ssotRegistry";
 import { getAuthInfo } from "../lib/authStore";
+import { buildAbsoluteUrl, generateQrDataUrl, downloadDataUrl } from "../lib/qrLink";
 
 function normalizeShopAssetUrl(raw) {
   const text = String(raw || '').trim();
@@ -117,6 +118,11 @@ export default function ShopDetail() {
   const [shopImageFiles, setShopImageFiles] = useState([]);
   const [shopImagePreviewUrls, setShopImagePreviewUrls] = useState([]);
   const [shopImageUploading, setShopImageUploading] = useState(false);
+  const [shopQrDataUrl, setShopQrDataUrl] = useState("");
+  const [shopQrLoading, setShopQrLoading] = useState(false);
+  const [reservationOpen, setReservationOpen] = useState(false);
+  const [rsvForm, setRsvForm] = useState({ date: '', time: '', service: '', people: 1, name: '', phone: '', notes: '' });
+  const [rsvSubmitting, setRsvSubmitting] = useState(false);
   const [resolvedMapLocation, setResolvedMapLocation] = useState(() => {
     const lat = toFiniteCoordinate(passedShop?.lat);
     const lng = toFiniteCoordinate(passedShop?.lng);
@@ -254,6 +260,31 @@ export default function ShopDetail() {
     };
   }, [shop?.lat, shop?.lng, shop?.address]);
 
+  useEffect(() => {
+    let cancelled = false;
+    async function buildShopQr() {
+      const shopId = String(shop?.id || shop?.shopId || id || '').trim();
+      if (!shopId) {
+        setShopQrDataUrl('');
+        return;
+      }
+      setShopQrLoading(true);
+      try {
+        const targetUrl = buildAbsoluteUrl(`/shops/${encodeURIComponent(shopId)}`);
+        const dataUrl = await generateQrDataUrl(targetUrl, 280);
+        if (!cancelled) setShopQrDataUrl(dataUrl);
+      } catch (error) {
+        if (!cancelled) setShopQrDataUrl('');
+      } finally {
+        if (!cancelled) setShopQrLoading(false);
+      }
+    }
+    buildShopQr();
+    return () => {
+      cancelled = true;
+    };
+  }, [shop?.id, shop?.shopId, id]);
+
   // ★ 후기 상태
   const [reviews, setReviews] = useState([]);
   const [reviewInput, setReviewInput] = useState("");
@@ -320,6 +351,35 @@ export default function ShopDetail() {
     }
   };
 
+  // ★ 예약하기
+  const handleReservation = async () => {
+    const auth = getAuthInfo();
+    if (!auth || !auth.memberId) { window.alert('로그인이 필요합니다.'); return; }
+    if (!rsvForm.date || !rsvForm.time) { window.alert('날짜와 시간을 선택해주세요.'); return; }
+    if (!rsvForm.name.trim()) { window.alert('이름을 입력해주세요.'); return; }
+    if (!rsvForm.phone.trim()) { window.alert('전화번호를 입력해주세요.'); return; }
+    setRsvSubmitting(true);
+    try {
+      await storageAdapter.createReservation(shop.id || shop.shopId, {
+        reservedDate: rsvForm.date,
+        reservedTime: rsvForm.time,
+        serviceName: rsvForm.service || null,
+        numberOfPeople: rsvForm.people || 1,
+        guestName: rsvForm.name.trim(),
+        guestPhone: rsvForm.phone.trim(),
+        notes: rsvForm.notes.trim() || null,
+      }, auth.memberId);
+      setReservationOpen(false);
+      setRsvForm({ date: '', time: '', service: '', people: 1, name: '', phone: '', notes: '' });
+      const goMy = window.confirm('예약이 신청되었습니다!\n상점에서 확인 후 알림으로 안내드립니다.\n\n내 예약 내역을 확인하시겠습니까?');
+      if (goMy) navigate('/my', { state: { tab: 'activity' } });
+    } catch (err) {
+      window.alert('예약 실패: ' + (err.message || '알 수 없는 오류'));
+    } finally {
+      setRsvSubmitting(false);
+    }
+  };
+
   // ★ 전화하기
   const handleCall = () => {
     if (shop?.phone) {
@@ -367,6 +427,7 @@ export default function ShopDetail() {
   const canAddMoreShopImages = existingShopImageCount + pendingShopImageCount < 3;
   const mapAddress = String(shop?.address || '').trim();
   const mapMarkerPosition = getKoreaMapMarkerPosition(resolvedMapLocation);
+  const shopPublicUrl = buildAbsoluteUrl(`/shops/${encodeURIComponent(String(shop?.id || shop?.shopId || id || ''))}`);
 
   const handleShopImagesChange = (e) => {
     const selectedFiles = Array.from(e.target.files || []);
@@ -643,6 +704,38 @@ export default function ShopDetail() {
             <span>{shop.address}</span>
           </div>
         )}
+
+        <div style={{ marginTop: 8, padding: 12, borderRadius: 14, border: '1px solid var(--c-border)', background: 'var(--c-surface)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 8 }}>
+            <strong style={{ fontSize: 13 }}>상점 QR</strong>
+            <span style={{ fontSize: 11, opacity: 0.72 }}>스캔하면 상점 상세로 이동</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+            <div style={{ width: 96, height: 96, borderRadius: 10, border: '1px solid rgba(15,23,42,0.12)', background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'hidden' }}>
+              {shopQrDataUrl ? (
+                <img src={shopQrDataUrl} alt="상점 QR 코드" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                <span style={{ fontSize: 11, opacity: 0.6 }}>{shopQrLoading ? '생성 중...' : '미생성'}</span>
+              )}
+            </div>
+            <div style={{ display: 'flex', flex: 1, minWidth: 180, gap: 8, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!shopQrDataUrl) return;
+                  const safeShopName = String(shop?.name || 'shop').replace(/\s+/g, '-');
+                  downloadDataUrl(shopQrDataUrl, `${safeShopName}-qr.png`);
+                }}
+                className="su-btnGhost"
+                style={{ flex: 1, minWidth: 120, cursor: shopQrDataUrl ? 'pointer' : 'not-allowed', opacity: shopQrDataUrl ? 1 : 0.6 }}
+                disabled={!shopQrDataUrl}
+              >
+                QR 다운로드
+              </button>
+
+            </div>
+          </div>
+        </div>
       </section>
 
       {/* thick divider */}
@@ -1110,7 +1203,7 @@ export default function ShopDetail() {
           paddingRight: 16,
           background: "linear-gradient(to top, var(--c-bg) 0%, var(--c-bg) 70%, transparent 100%)",
           display: "flex",
-          gap: 12,
+          gap: 10,
           zIndex: 100,
         }}
       >
@@ -1131,7 +1224,28 @@ export default function ShopDetail() {
             gap: 8,
           }}
         >
-          📞 전화하기
+          📞 전화
+        </button>
+        <button
+          type="button"
+          onClick={() => setReservationOpen(true)}
+          style={{
+            flex: 1,
+            padding: "14px",
+            borderRadius: 14,
+            fontWeight: 800,
+            fontSize: 15,
+            cursor: "pointer",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
+            background: "linear-gradient(135deg, #f59e0b, #d97706)",
+            color: "#fff",
+            border: "none",
+          }}
+        >
+          📅 예약
         </button>
         <button
           type="button"
@@ -1153,6 +1267,59 @@ export default function ShopDetail() {
           🧭 길찾기
         </button>
       </div>
+
+      {/* ────────── 예약 모달 ────────── */}
+      {reservationOpen && (
+        <div style={{ position: "fixed", inset: 0, zIndex: 1200, background: "rgba(0,0,0,0.45)", backdropFilter: "blur(4px)", display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }} onClick={() => setReservationOpen(false)}>
+          <div onClick={e => e.stopPropagation()} style={{ width: "100%", maxWidth: 460, background: "#fff", borderRadius: 20, padding: "24px 18px", maxHeight: "85vh", overflowY: "auto", boxShadow: "0 8px 40px rgba(0,0,0,0.25)" }}>
+            <div style={{ fontSize: 18, fontWeight: 900, marginBottom: 16, color: "#0f172a" }}>📅 예약하기 — {shop?.name}</div>
+
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 700, color: "#64748b" }}>날짜 *</label>
+                  <input type="date" value={rsvForm.date} onChange={e => setRsvForm(p => ({ ...p, date: e.target.value }))} style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #e2e8f0", borderRadius: 12, fontSize: 14, marginTop: 4, background: "#fff", color: "#0f172a" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 700, color: "#64748b" }}>시간 *</label>
+                  <input type="time" value={rsvForm.time} onChange={e => setRsvForm(p => ({ ...p, time: e.target.value }))} style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #e2e8f0", borderRadius: 12, fontSize: 14, marginTop: 4, background: "#fff", color: "#0f172a" }} />
+                </div>
+              </div>
+
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#64748b" }}>서비스/메뉴</label>
+                <input type="text" placeholder="예: 커트, 점심 코스" value={rsvForm.service} onChange={e => setRsvForm(p => ({ ...p, service: e.target.value }))} style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #e2e8f0", borderRadius: 12, fontSize: 14, marginTop: 4, background: "#fff", color: "#0f172a" }} />
+              </div>
+
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#64748b" }}>인원</label>
+                <input type="number" min={1} max={50} value={rsvForm.people} onChange={e => setRsvForm(p => ({ ...p, people: Math.max(1, Number(e.target.value)) }))} style={{ width: 80, padding: "10px 12px", border: "1.5px solid #e2e8f0", borderRadius: 12, fontSize: 14, marginTop: 4, textAlign: "center", background: "#fff", color: "#0f172a" }} />
+              </div>
+
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 700, color: "#64748b" }}>이름 *</label>
+                  <input type="text" placeholder="홍길동" value={rsvForm.name} onChange={e => setRsvForm(p => ({ ...p, name: e.target.value }))} style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #e2e8f0", borderRadius: 12, fontSize: 14, marginTop: 4, background: "#fff", color: "#0f172a" }} />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 700, color: "#64748b" }}>전화번호 *</label>
+                  <input type="tel" placeholder="010-0000-0000" value={rsvForm.phone} onChange={e => setRsvForm(p => ({ ...p, phone: e.target.value }))} style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #e2e8f0", borderRadius: 12, fontSize: 14, marginTop: 4, background: "#fff", color: "#0f172a" }} />
+                </div>
+              </div>
+
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 700, color: "#64748b" }}>요청사항</label>
+                <textarea placeholder="추가 요청사항을 입력하세요" value={rsvForm.notes} onChange={e => setRsvForm(p => ({ ...p, notes: e.target.value }))} rows={2} style={{ width: "100%", padding: "10px 12px", border: "1.5px solid #e2e8f0", borderRadius: 12, fontSize: 14, marginTop: 4, resize: "vertical", background: "#fff", color: "#0f172a" }} />
+              </div>
+            </div>
+
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginTop: 16 }}>
+              <button type="button" onClick={() => setReservationOpen(false)} style={{ padding: 14, borderRadius: 14, border: "1.5px solid #e2e8f0", background: "#f8fafc", fontWeight: 800, fontSize: 15, cursor: "pointer", color: "#64748b" }}>취소</button>
+              <button type="button" onClick={handleReservation} disabled={rsvSubmitting} style={{ padding: 14, borderRadius: 14, border: "none", background: "linear-gradient(135deg, #f59e0b, #d97706)", color: "#fff", fontWeight: 800, fontSize: 15, cursor: "pointer", opacity: rsvSubmitting ? 0.6 : 1 }}>{rsvSubmitting ? "신청 중..." : "예약 신청"}</button>
+            </div>
+          </div>
+        </div>
+      )}
       </>
       )}
     </div>

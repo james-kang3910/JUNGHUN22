@@ -152,6 +152,7 @@ export default function Home() {
       missions: "/missions",
       mission: "/missions",
       support: "/support",
+      distribution: "/distribution",
       biz: "/shops",
       card: "/my",
     };
@@ -300,16 +301,34 @@ export default function Home() {
     if (!popupCandidates.length) return;
     try {
       const sessionKey = getNoticePopupSessionKey();
-      const lastSeenToken = sessionStorage.getItem(sessionKey) || '';
+      const lastSeenData = sessionStorage.getItem(sessionKey) || '';
+      const now = Date.now();
+      const HOURS_24 = 24 * 60 * 60 * 1000; // 24시간을 밀리초로 변환
+      
+      // 저장된 데이터 파싱 (형식: "token|timestamp")
+      let lastSeenToken = '';
+      let lastSeenTime = 0;
+      if (lastSeenData) {
+        const parts = lastSeenData.split('|');
+        lastSeenToken = parts[0] || '';
+        lastSeenTime = parseInt(parts[1], 10) || 0;
+      }
+      
       const popupNotice = popupCandidates.find((item) => {
         const token = getNoticePopupToken(item);
         if (!token) return false;
-        if (lastSeenToken === token) return false;
+        if (lastSeenToken === token) {
+          // 같은 공지사항이면 24시간이 지났는지 확인
+          if (now - lastSeenTime < HOURS_24) {
+            return false; // 24시간 이내이면 다시 안 보여줌
+          }
+        }
         return true;
       });
       if (!popupNotice) return;
       const noticeToken = getNoticePopupToken(popupNotice);
-      sessionStorage.setItem(sessionKey, noticeToken);
+      // 토큰과 타임스탬프를 함께 저장
+      sessionStorage.setItem(sessionKey, `${noticeToken}|${now}`);
       setNotice(popupNotice);
       setNoticeModalOpen(true);
     } catch (e) {
@@ -718,10 +737,7 @@ export default function Home() {
     else if (key === "mission") safeTab("missions");
     else if (key === "community") safeTab("community");
     else if (key === "support") safeTab("support");
-    else if (key === "distribution") {
-      window.alert("추후 오픈예정");
-      return;
-    }
+    else if (key === "distribution") safeTab("distribution");
     else if (key === "broadcast") navigate("/broadcast");
     else if (key === "audition") navigate("/audition");
     else if (key === "card") safeTab("my");
@@ -1152,9 +1168,9 @@ export default function Home() {
                     <video
                       src={img.videoUrl || undefined}
                       autoPlay
-                      muted
                       playsInline
                       loop
+                      controls
                       preload="metadata"
                       poster={img.imageUrl || undefined}
                       style={{

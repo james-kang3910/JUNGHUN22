@@ -13,6 +13,7 @@ import VideoEmbed from '../components/VideoEmbed';
 import { isDirectVideoUrl, parseYouTubeId } from '../lib/videoUtils';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 import { getRegionById } from '../data/regions.seed';
+import { buildAbsoluteUrl, generateQrDataUrl, downloadDataUrl } from '../lib/qrLink';
 
 function resolveNoticeImageUrl(imageUrl) {
   const raw = String(imageUrl || '').trim();
@@ -64,6 +65,8 @@ export default function RegionHub() {
   const [highlights, setHighlights] = useState([]); // 오디션+미션+방송 혼합
   const [stats,      setStats]      = useState({ activeCount: 0 });
   const [loading,    setLoading]    = useState(true);
+  const [regionQrDataUrl, setRegionQrDataUrl] = useState('');
+  const [regionQrLoading, setRegionQrLoading] = useState(false);
   const hasLoadedRef = useRef(false);
 
   const loadAll = useCallback(async ({ background = false } = {}) => {
@@ -141,6 +144,33 @@ export default function RegionHub() {
   useEffect(() => { loadAll(); }, [loadAll]);
   useAutoRefresh(() => loadAll({ background: true }), { enabled: !!regionId, intervalMs: 60000 });
 
+  useEffect(() => {
+    let cancelled = false;
+    async function buildRegionQr() {
+      const rid = String(regionId || '').trim();
+      if (!rid) {
+        setRegionQrDataUrl('');
+        return;
+      }
+      setRegionQrLoading(true);
+      try {
+        const targetUrl = buildAbsoluteUrl(`/r/${encodeURIComponent(rid)}`);
+        const dataUrl = await generateQrDataUrl(targetUrl, 280);
+        if (!cancelled) setRegionQrDataUrl(dataUrl);
+      } catch (error) {
+        if (!cancelled) setRegionQrDataUrl('');
+      } finally {
+        if (!cancelled) setRegionQrLoading(false);
+      }
+    }
+    buildRegionQr();
+    return () => {
+      cancelled = true;
+    };
+  }, [regionId]);
+
+  const regionPortalUrl = buildAbsoluteUrl(`/r/${encodeURIComponent(String(regionId || ''))}`);
+
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: 60, color: '#9BA8AE', fontSize: 14 }}>
@@ -174,6 +204,36 @@ export default function RegionHub() {
           {stats.activeCount > 0
             ? `오늘 참여 가능한 활동 ${stats.activeCount}개`
             : '지금 지역 활동을 시작해보세요'}
+        </div>
+
+        <div style={{ marginBottom: 10, padding: '8px 10px', borderRadius: 12, border: '1px solid rgba(255,255,255,0.26)', background: 'rgba(0,0,0,0.12)' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 6 }}>
+            <strong style={{ fontSize: 12, fontWeight: 800 }}>지역포털 QR</strong>
+            <span style={{ fontSize: 10, opacity: 0.82 }}>스캔하면 지역포털 바로 이동</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+            <div style={{ width: 72, height: 72, borderRadius: 10, border: '1px solid rgba(255,255,255,0.3)', background: '#fff', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              {regionQrDataUrl ? (
+                <img src={regionQrDataUrl} alt="지역포털 QR 코드" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+              ) : (
+                <span style={{ fontSize: 10, color: '#334155' }}>{regionQrLoading ? '생성중' : '-'}</span>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 6, flex: 1, minWidth: 180, flexWrap: 'wrap' }}>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!regionQrDataUrl) return;
+                  const safeName = String(regionName || regionLabel || 'region').replace(/\s+/g, '-');
+                  downloadDataUrl(regionQrDataUrl, `${safeName}-portal-qr.png`);
+                }}
+                style={{ ...ctaBtnStyle, background: 'rgba(255,255,255,0.2)', border: '1px solid rgba(255,255,255,0.35)', padding: '7px 12px' }}
+                disabled={!regionQrDataUrl}
+              >
+                QR 다운로드
+              </button>
+            </div>
+          </div>
         </div>
 
         {/* Quick CTA — 2열 진입 메뉴 */}

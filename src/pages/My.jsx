@@ -9,7 +9,7 @@ import * as supplyService from "../lib/supplyService";
 import * as storageAdapter from "../lib/storageAdapter";
 import { getMyShops } from "../lib/storageAdapter";
 import { apiPost } from "../lib/apiClient";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useLocation } from "react-router-dom";
 import { isLoggedIn, getSession, getAuthInfo, getCurrentUser, hydrateAuthFromServer, isAuthReady } from "../lib/authStore";
 import { canAccessRegionalConsole } from "../lib/permissions";
 import * as chatService from "../lib/chatService";
@@ -33,6 +33,25 @@ const POINT_TYPE_LABELS = {
   REWARD:        { label: '보상', bg: 'rgba(59,130,246,0.15)', color: '#3b82f6' },
   TRANSFER_IN:   { label: '받기', bg: 'rgba(34,197,94,0.15)', color: '#22c55e' },
   TRANSFER_OUT:  { label: '보내기', bg: 'rgba(239,68,68,0.15)', color: '#ef4444' },
+};
+
+const DISTRIBUTION_TYPE_KEYS = new Set([
+  'food',
+  'daily',
+  'health',
+  'digital',
+  'appliance',
+  'fashion',
+  'local-special',
+  'group-buy',
+]);
+
+const DISTRIBUTION_STATUS_LABELS = {
+  available: '판매중',
+  active: '판매중',
+  soldout: '품절',
+  hidden: '숨김',
+  pending: '대기',
 };
 
 // ★ 헬퍼 함수: 회원 ID 통일
@@ -339,6 +358,9 @@ export default function My() {
       ? true
       : fallbackSupplyManager !== undefined && fallbackSupplyManager !== null;
   const isSupplyManager = !!(resolvedSupplyManager ?? fallbackSupplyManager ?? false);
+  const resolvedDistributionManager = userData?.distributionManager;
+  const fallbackDistributionManager = sessionForId?.distributionManager;
+  const isDistributionManager = !!(resolvedDistributionManager ?? fallbackDistributionManager ?? false);
   const effectiveUserId = authReadyUser ? currentUserId : null;
   const sdMarkValue = normalizeSdMark(
     userData?.sdMark ??
@@ -453,6 +475,29 @@ export default function My() {
     console.log('[MyOffice][BOOT]', { me: effectiveUserId, authed: !!effectiveUserId, authReadyUser, step: 'mount', userData: !!userData });
   }, [authReadyUser, effectiveUserId]);
 
+  // 내 예약 목록 로드 (조용한 폴링 + visibility 갱신)
+  useEffect(() => {
+    if (!effectiveUserId) return;
+    let mounted = true;
+    const loadMyRsv = async (silent) => {
+      if (!silent) setMyRsvLoading(true);
+      try {
+        const res = await storageAdapter.getMyReservations(effectiveUserId);
+        if (mounted) setMyReservations(res?.reservations || []);
+      } catch { if (mounted) setMyReservations([]); }
+      finally { if (!silent && mounted) setMyRsvLoading(false); }
+    };
+    loadMyRsv(false);
+    const iv = setInterval(() => { if (mounted) loadMyRsv(true); }, 15000);
+    const onVis = () => { if (!document.hidden && mounted) loadMyRsv(true); };
+    document.addEventListener('visibilitychange', onVis);
+    const onSwMsg = (e) => {
+      if (e.data?.type === 'push-received' && e.data?.tag === 'reservation-update' && mounted) loadMyRsv(true);
+    };
+    navigator.serviceWorker?.addEventListener('message', onSwMsg);
+    return () => { mounted = false; clearInterval(iv); document.removeEventListener('visibilitychange', onVis); navigator.serviceWorker?.removeEventListener('message', onSwMsg); };
+  }, [effectiveUserId]);
+
     // Friends & Chat state (hoisted before chat/friends effects to avoid TDZ)
     const [friends, setFriends] = useState([]);
     const [friendCount, setFriendCount] = useState(0);
@@ -482,6 +527,13 @@ export default function My() {
   const [payoutForm, setPayoutForm] = useState({ amount: '', bankName: '', accountNumber: '', depositorName: '', memo: '' });
   const [allPayoutsModalOpen, setAllPayoutsModalOpen] = useState(false);
   const [payoutListFilter, setPayoutListFilter] = useState('ALL');
+
+  // ---------------- Shop Reservations (상점 예약 관리) ----------------
+  const [shopReservations, setShopReservations] = useState([]);
+  const [shopRsvLoading, setShopRsvLoading] = useState(false);
+  const [myReservations, setMyReservations] = useState([]);
+  const [myRsvLoading, setMyRsvLoading] = useState(false);
+  const [rejectModal, setRejectModal] = useState({ open: false, rsvId: null, reason: '' });
 
   useEffect(() => {
     const openPayoutModal = (event) => {
@@ -706,7 +758,39 @@ export default function My() {
         }
       };
       fetchShopPointSummary();
-      return () => { mounted = false; };
+
+      // 상점 예약 로드
+      const loadShopReservations = async (silent) => {
+        if (!silent) setShopRsvLoading(true);
+        try {
+          const res = await storageAdapter.getShopReservations(activeShopId);
+          if (mounted) setShopReservations(res?.reservations || []);
+        } catch { if (mounted) setShopReservations([]); }
+        finally { if (!silent && mounted) setShopRsvLoading(false); }
+      };
+      loadShopReservations(false);
+
+      // 15초마다 조용히 갱신 (로딩 표시 없음 = 깜빡임 없음)
+      const rsvInterval = setInterval(() => { if (mounted) loadShopReservations(true); }, 15000);
+
+      // 탭 전환 시 즉시 갱신
+      const onVisible = () => { if (!document.hidden && mounted) loadShopReservations(true); };
+      document.addEventListener('visibilitychange', onVisible);
+
+      // 푸시 알림 수신 시 즉시 갱신
+      const onSwMessage = (e) => {
+        if (e.data?.type === 'push-received' && e.data?.tag === 'reservation-new' && mounted) {
+          loadShopReservations(true);
+        }
+      };
+      navigator.serviceWorker?.addEventListener('message', onSwMessage);
+
+      return () => {
+        mounted = false;
+        clearInterval(rsvInterval);
+        document.removeEventListener('visibilitychange', onVisible);
+        navigator.serviceWorker?.removeEventListener('message', onSwMessage);
+      };
     }, [activeShopId, effectiveUserId]);
 
     const openFriendModal = () => {
@@ -915,6 +999,7 @@ export default function My() {
 
   // Toast state for notifying user when they get supplyManager permission
   const [toast, setToast] = useState({ open: false, message: "", type: "success" });
+  const [customAlert, setCustomAlert] = useState({ open: false, message: "" });
 
   useEffect(() => {
     // authReadyUser가 아직 false면 초기화 건너뜀 (auth 부팅 중)
@@ -989,7 +1074,12 @@ export default function My() {
   // 포인트 탭 상태 (안전 기본값)
   const [pointTab, setPointTab] = useState("all");
   const [pointHistoryPage, setPointHistoryPage] = useState(0);
-  const [myTab, setMyTab] = useState('home'); // 'home' | 'wallet' | 'activity'
+  const location = useLocation();
+  const [myTab, setMyTab] = useState(() => {
+    const t = location.state?.tab;
+    if (t === 'activity' || t === 'wallet') return t;
+    return 'home';
+  }); // 'home' | 'wallet' | 'activity'
   // walletView: localStorage 연동 (새로고침 후에도 유지)
   const [walletView, setWalletView] = useState(() => {
     try {
@@ -1814,6 +1904,111 @@ export default function My() {
   const [editingMyItemId, setEditingMyItemId] = useState(null);
   const [editMyForm, setEditMyForm] = useState({});
 
+  const [distributionItems, setDistributionItems] = useState([]);
+  const [distributionOrders, setDistributionOrders] = useState([]);
+  const [distributionManagedOrders, setDistributionManagedOrders] = useState([]);
+  const [distributionLoading, setDistributionLoading] = useState(false);
+  const [showAllSales, setShowAllSales] = useState(false);
+  const [showAllOrders, setShowAllOrders] = useState(false);
+  const [showAllWithdrawals, setShowAllWithdrawals] = useState(false);
+  const [distWallet, setDistWallet] = useState(null);
+  const [distWalletLoading, setDistWalletLoading] = useState(false);
+  const [distWithdrawOpen, setDistWithdrawOpen] = useState(false);
+  const [homeView, setHomeView] = useState('main');
+  const [distWithdrawSubmitting, setDistWithdrawSubmitting] = useState(false);
+  const [distWithdrawForm, setDistWithdrawForm] = useState({ amount: '', bankName: '', accountNumber: '', depositorName: '', memo: '' });
+  const [distributionFormOpen, setDistributionFormOpen] = useState(false);
+  const [distributionSaving, setDistributionSaving] = useState(false);
+  const [editingDistributionId, setEditingDistributionId] = useState(null);
+  const [distributionMainFile, setDistributionMainFile] = useState(null);
+  const [distributionExtraFiles, setDistributionExtraFiles] = useState([]);
+  const [distributionPdfFile, setDistributionPdfFile] = useState(null);
+  const [distributionForm, setDistributionForm] = useState({
+    title: '',
+    category: 'food',
+    productType: 'general',
+    imageUrl: '',
+    extraImageUrls: [],
+    videoUrl: '',
+    description: '',
+    sellerIntro: '',
+    receiveMethod: 'delivery',
+    visibility: 'public',
+    featured: false,
+    todayDeal: false,
+    unlimitedStock: false,
+    price: '',
+    quantity: '1',
+    status: 'available',
+  });
+
+  const resetDistributionForm = () => {
+    setEditingDistributionId(null);
+    setDistributionMainFile(null);
+    setDistributionExtraFiles([]);
+    setDistributionPdfFile(null);
+    setDistributionForm({
+      title: '',
+      category: 'food',
+      productType: 'general',
+      imageUrl: '',
+      extraImageUrls: [],
+      videoUrl: '',
+      pdfUrl: '',
+      description: '',
+      sellerIntro: '',
+      receiveMethod: 'delivery',
+      visibility: 'public',
+      featured: false,
+      todayDeal: false,
+      unlimitedStock: false,
+      price: '',
+      quantity: '1',
+      status: 'available',
+    });
+  };
+
+  const openCreateDistributionForm = () => {
+    resetDistributionForm();
+    setDistributionFormOpen(true);
+  };
+
+  const openEditDistributionForm = (item) => {
+    let meta = {};
+    try {
+      meta = typeof item?.uploadMeta === 'string' ? JSON.parse(item.uploadMeta || '{}') : (item?.uploadMeta || {});
+    } catch (e) {
+      meta = {};
+    }
+
+    setEditingDistributionId(item?.id || null);
+    setDistributionForm({
+      title: String(item?.title || '').trim(),
+      category: String(item?.type || 'food').trim(),
+      productType: String(meta?.productType || 'general').trim(),
+      imageUrl: String(item?.imageUrl || item?.image_url || '').trim(),
+      extraImageUrls: (() => {
+        const urls = meta?.extraImageUrls || meta?.extraImageUrl;
+        if (Array.isArray(urls)) return urls.filter(Boolean);
+        if (typeof urls === 'string' && urls.trim()) return [urls.trim()];
+        return [];
+      })(),
+      videoUrl: String(meta?.videoUrl || '').trim(),
+      pdfUrl: String(meta?.pdfUrl || '').trim(),
+      description: String(item?.description || '').trim(),
+      sellerIntro: String(meta?.sellerIntro || meta?.intro || '').trim(),
+      receiveMethod: String(meta?.receiveMethod || 'delivery').trim(),
+      visibility: String(meta?.visibility || (String(item?.status || '').toLowerCase() === 'hidden' ? 'hidden' : 'public')).trim(),
+      featured: !!meta?.featured,
+      todayDeal: !!meta?.todayDeal,
+      unlimitedStock: !!meta?.unlimitedStock,
+      price: String(item?.price ?? ''),
+      quantity: String(item?.quantity ?? '1'),
+      status: String(item?.status || 'available').trim().toLowerCase(),
+    });
+    setDistributionFormOpen(true);
+  };
+
   useEffect(() => {
     let mounted = true;
     const loadManaged = async () => {
@@ -1822,10 +2017,24 @@ export default function My() {
         return;
       }
       try {
-        const res = await fetch('/api/my/supply-requests/managed', { credentials: 'include' });
+        const res = await fetch('/api/my/supply-requests/managed?requestType=supply', { credentials: 'include' });
         if (res.ok) {
           const data = await res.json();
-          if (mounted) setManagedRequests(data.requests || []);
+          if (mounted) {
+            const rows = Array.isArray(data.requests) ? data.requests : [];
+            const supplyOnlyRows = rows.filter((row) => {
+              const type = String(row?.requestType || row?.request_type || 'supply').toLowerCase();
+              const orderStatus = String(row?.orderStatus || row?.order_status || '').toUpperCase();
+              const paymentRef = String(row?.paymentReferenceId || row?.payment_reference_id || '').trim();
+              const message = String(row?.message || '').toLowerCase();
+              if (type === 'distribution') return false;
+              if (orderStatus) return false;
+              if (paymentRef) return false;
+              if (message.includes('포인트 결제 주문') || message.includes('배송지:') || message.includes('수령방식:')) return false;
+              return true;
+            });
+            setManagedRequests(supplyOnlyRows);
+          }
         } else {
           if (mounted) setManagedRequests([]);
         }
@@ -1862,6 +2071,260 @@ export default function My() {
     window.addEventListener('supply:updated', onSsot);
     return () => { mounted = false; window.removeEventListener('su:ssot:changed', onSsot); window.removeEventListener('supply:updated', onSsot); };
   }, [isSupplyManager, effectiveUserId]);
+
+  useEffect(() => {
+    let mounted = true;
+
+    const normalizeRows = (rows) => (Array.isArray(rows) ? rows : []);
+
+    const loadDistributionData = async () => {
+      if (!effectiveUserId) {
+        if (mounted) {
+          setDistributionItems([]);
+          setDistributionOrders([]);
+          setDistributionManagedOrders([]);
+        }
+        return;
+      }
+
+      setDistributionLoading(true);
+      try {
+        const [allSupplies, myRequests, managedRequests] = await Promise.all([
+          storageAdapter.fetchSupplies().catch(() => []),
+          storageAdapter.getSupplyRequests({ requesterId: effectiveUserId, requestType: 'distribution' }).catch(() => []),
+          storageAdapter.getSupplyRequests({ managerId: effectiveUserId, requestType: 'distribution' }).catch(() => []),
+        ]);
+
+        const myItems = normalizeRows(allSupplies)
+          .filter((item) => String(item?.createdBy || item?.created_by || '') === String(effectiveUserId))
+          .filter((item) => DISTRIBUTION_TYPE_KEYS.has(String(item?.type || '').toLowerCase()))
+          .filter((item) => String(item?.status || '').toLowerCase() !== 'deleted');
+
+        const myItemIds = new Set(myItems.map((item) => String(item?.id || item?.supplyId || item?.supply_id || '')).filter(Boolean));
+
+        // 구매자 주문 = requesterId 기준으로 가져온 모든 주문 (내가 등록한 상품 필터 제거)
+        const myOrderRows = normalizeRows(myRequests);
+
+        const managedOrderRows = normalizeRows(managedRequests)
+          .filter((request) => myItemIds.has(String(request?.supplyItemId || request?.supply_item_id || '')));
+
+        if (mounted) {
+          setDistributionItems(myItems);
+          setDistributionOrders(myOrderRows);
+          setDistributionManagedOrders(managedOrderRows);
+        }
+      } catch (error) {
+        if (mounted) {
+          setDistributionItems([]);
+          setDistributionOrders([]);
+          setDistributionManagedOrders([]);
+        }
+      } finally {
+        if (mounted) setDistributionLoading(false);
+      }
+    };
+
+    loadDistributionData();
+    const onReload = () => { loadDistributionData(); };
+    window.addEventListener('su:ssot:changed', onReload);
+    window.addEventListener('supply:updated', onReload);
+    return () => {
+      mounted = false;
+      window.removeEventListener('su:ssot:changed', onReload);
+      window.removeEventListener('supply:updated', onReload);
+    };
+  }, [effectiveUserId]);
+
+      useEffect(() => {
+        if (!effectiveUserId) return;
+        let mounted = true;
+        const load = async () => {
+          setDistWalletLoading(true);
+          try {
+            const data = await storageAdapter.getDistWallet();
+            if (mounted) setDistWallet(data);
+          } catch (e) {
+            if (mounted) setDistWallet(null);
+          } finally {
+            if (mounted) setDistWalletLoading(false);
+          }
+        };
+        load();
+        const onReload = () => { load(); };
+        window.addEventListener('su:ssot:changed', onReload);
+        window.addEventListener('supply:updated', onReload);
+        return () => {
+          mounted = false;
+          window.removeEventListener('su:ssot:changed', onReload);
+          window.removeEventListener('supply:updated', onReload);
+        };
+      }, [effectiveUserId]);
+
+      const handleDistWithdraw = async (e) => {
+        e.preventDefault();
+        const amount = Math.trunc(Number(distWithdrawForm.amount || 0));
+        if (!amount || amount <= 0) { alert('출금 금액을 입력하세요.'); return; }
+        if (!distWithdrawForm.bankName.trim() || !distWithdrawForm.accountNumber.trim() || !distWithdrawForm.depositorName.trim()) {
+          alert('은행명, 계좌번호, 예금주명을 모두 입력하세요.'); return;
+        }
+        const available = distWallet?.available ?? 0;
+        if (amount > available) { alert(`출금 가능 잔액(${available.toLocaleString('ko-KR')}P)을 초과할 수 없습니다.`); return; }
+        setDistWithdrawSubmitting(true);
+        try {
+          await storageAdapter.requestDistWithdraw({ ...distWithdrawForm, amount });
+          setCustomAlert({ open: true, message: '출금 요청이 접수되었습니다. 관리자 승인 후 지급됩니다.' });
+          setDistWithdrawOpen(false);
+          setDistWithdrawForm({ amount: '', bankName: '', accountNumber: '', depositorName: '', memo: '' });
+          const data = await storageAdapter.getDistWallet();
+          setDistWallet(data);
+        } catch (err) {
+          alert('출금 요청 실패: ' + (err?.message || '알 수 없는 오류'));
+        } finally {
+          setDistWithdrawSubmitting(false);
+        }
+      };
+
+      const handleDistributionSave = async (event) => {
+    event.preventDefault();
+    if (!isDistributionManager) {
+      setToast({ open: true, message: '유통지원 권한이 없어 등록할 수 없습니다.', type: 'error' });
+      return;
+    }
+
+    const title = String(distributionForm.title || '').trim();
+    const price = Math.max(0, Math.trunc(Number(distributionForm.price || 0)));
+    const quantity = distributionForm.unlimitedStock ? 999999 : Math.max(0, Math.trunc(Number(distributionForm.quantity || 0)));
+    const type = String(distributionForm.category || 'food').trim().toLowerCase();
+    const visibility = String(distributionForm.visibility || 'public').trim().toLowerCase();
+    const resolvedRegionId = String(userData?.regionId || userData?.region_id || '').trim() || null;
+    const sellerName = String(userData?.name || '').trim() || '판매자';
+
+    if (!title) {
+      setToast({ open: true, message: '상품명을 입력해 주세요.', type: 'error' });
+      return;
+    }
+
+    if (!DISTRIBUTION_TYPE_KEYS.has(type)) {
+      setToast({ open: true, message: '카테고리를 다시 선택해 주세요.', type: 'error' });
+      return;
+    }
+
+    try {
+      setDistributionSaving(true);
+      let mainImageUrl = String(distributionForm.imageUrl || '').trim();
+      let extraImageUrls = Array.isArray(distributionForm.extraImageUrls) ? [...distributionForm.extraImageUrls] : [];
+      let pdfUrl = String(distributionForm.pdfUrl || '').trim();
+
+      if (distributionMainFile) {
+        const uploadedMain = await storageAdapter.uploadSupplyMedia(distributionMainFile);
+        mainImageUrl = String(uploadedMain?.mediaUrl || mainImageUrl || '').trim();
+      }
+
+      if (distributionExtraFiles.length > 0) {
+        const uploadResults = await Promise.all(
+          distributionExtraFiles.map((f) => storageAdapter.uploadSupplyMedia(f))
+        );
+        const newUrls = uploadResults.map((r) => String(r?.mediaUrl || '').trim()).filter(Boolean);
+        extraImageUrls = [...extraImageUrls, ...newUrls].slice(0, 3);
+      }
+
+      if (distributionPdfFile) {
+        const uploadedPdf = await storageAdapter.uploadSupplyMedia(distributionPdfFile);
+        pdfUrl = String(uploadedPdf?.mediaUrl || pdfUrl || '').trim();
+      }
+
+      const payload = {
+        title,
+        description: String(distributionForm.description || '').trim(),
+        type,
+        status: visibility === 'hidden'
+          ? 'hidden'
+          : String(distributionForm.status || 'available').trim().toLowerCase(),
+        price,
+        quantity,
+        imageUrl: mainImageUrl || null,
+        regionId: resolvedRegionId,
+        createdBy: String(effectiveUserId || ''),
+        uploadMeta: {
+          productType: String(distributionForm.productType || 'general').trim(),
+          receiveMethod: String(distributionForm.receiveMethod || 'delivery').trim(),
+          visibility,
+          featured: !!distributionForm.featured,
+          todayDeal: !!distributionForm.todayDeal,
+          unlimitedStock: !!distributionForm.unlimitedStock,
+          videoUrl: String(distributionForm.videoUrl || '').trim(),
+          extraImageUrls: extraImageUrls.filter(Boolean),
+          pdfUrl: pdfUrl || '',
+          sellerIntro: String(distributionForm.sellerIntro || '').trim(),
+          sellerId: String(effectiveUserId || ''),
+          sellerName,
+          regionId: resolvedRegionId,
+        },
+      };
+
+      if (editingDistributionId) {
+        await storageAdapter.updateSupply(editingDistributionId, payload);
+      } else {
+        await storageAdapter.createSupply(payload);
+      }
+
+      setDistributionFormOpen(false);
+      resetDistributionForm();
+      setToast({ open: true, message: editingDistributionId ? '상품 정보가 수정되었습니다.' : '유통 상품이 등록되었습니다.', type: 'success' });
+      window.dispatchEvent(new CustomEvent('su:ssot:changed', { detail: { type: 'supplies', operation: 'upsert' } }));
+      window.dispatchEvent(new Event('supply:updated'));
+    } catch (error) {
+      setToast({ open: true, message: error?.message || '상품 저장 중 오류가 발생했습니다.', type: 'error' });
+    } finally {
+      setDistributionSaving(false);
+    }
+  };
+
+  const handleDistributionStatus = async (item, nextStatus) => {
+    try {
+      await storageAdapter.updateSupply(item.id, { status: nextStatus });
+      setToast({ open: true, message: `상품 상태를 ${DISTRIBUTION_STATUS_LABELS[nextStatus] || nextStatus}(으)로 변경했습니다.`, type: 'success' });
+      window.dispatchEvent(new Event('su:ssot:changed'));
+      window.dispatchEvent(new Event('supply:updated'));
+    } catch (error) {
+      setToast({ open: true, message: error?.message || '상태 변경에 실패했습니다.', type: 'error' });
+    }
+  };
+
+  const handleDistributionDelete = async (itemId) => {
+    if (!window.confirm('이 유통 상품을 삭제하시겠습니까?')) return;
+    try {
+      await storageAdapter.deleteSupply(itemId);
+      setToast({ open: true, message: '상품이 삭제되었습니다.', type: 'success' });
+      window.dispatchEvent(new Event('su:ssot:changed'));
+      window.dispatchEvent(new Event('supply:updated'));
+    } catch (error) {
+      setToast({ open: true, message: error?.message || '상품 삭제에 실패했습니다.', type: 'error' });
+    }
+  };
+
+  const parseMyOrderMessageMeta = (message) => {
+    const raw = String(message || "");
+    const addressMatch = raw.match(/배송지:([^|]+)/);
+    const visitMatch = raw.match(/방문:([^|]+)/);
+    return {
+      address: addressMatch ? String(addressMatch[1]).trim() : "",
+      visit: visitMatch ? String(visitMatch[1]).trim() : "",
+    };
+  };
+
+  const handleDistributionManagedStatus = async (requestRow, updates, successMessage) => {
+    const requestId = requestRow?.id || requestRow?.requestId;
+    if (!requestId) return;
+    try {
+      await storageAdapter.updateSupplyRequest(requestId, updates);
+      setToast({ open: true, message: successMessage || '주문 상태를 변경했습니다.', type: 'success' });
+      window.dispatchEvent(new Event('su:ssot:changed'));
+      window.dispatchEvent(new Event('supply:updated'));
+    } catch (error) {
+      setToast({ open: true, message: error?.message || '주문 상태 변경에 실패했습니다.', type: 'error' });
+    }
+  };
 
   const handleMyItemEdit = (item) => {
     const id = item.id;
@@ -2451,10 +2914,10 @@ export default function My() {
           setPayoutRequests(sortedReqs);
           setPayoutRequests(sortedReqs.slice(0,4));
         } catch (e) {}
-        alert('지급요청이 등록되었습니다. 관리자의 확인을 기다려주세요.');
+        setCustomAlert({ open: true, message: '지급요청이 등록되었습니다. 관리자의 확인을 기다려주세요.' });
       } catch (e) {
         console.error(e);
-        alert('지급요청 처리 중 오류가 발생했습니다.');
+        setCustomAlert({ open: true, message: '지급요청 처리 중 오류가 발생했습니다.' });
       }
     };
 
@@ -2771,6 +3234,154 @@ export default function My() {
               </div>
             )) : <div style={{ textAlign: 'center', color: 'var(--c-tx-s)' }}>구매 내역이 없습니다</div>}
           </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderDistributionFormModal = () => {
+    if (!distributionFormOpen) return null;
+    const autoRegionLabel = resolveRegionLabel(userData || {}) || '지역 미설정';
+    const autoSellerName = String(userData?.name || '').trim() || '판매자';
+    return (
+      <div onClick={() => setDistributionFormOpen(false)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 9999, padding: 16 }}>
+        <div onClick={event => event.stopPropagation()} className="su-modal su-modal--lg" style={{ maxHeight: '90vh', overflowY: 'auto' }}>
+          <div className="su-modalHeader" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>{editingDistributionId ? '🛠️ 유통 상품 수정' : '🛍️ 유통 상품 등록'}</span>
+            <button onClick={() => setDistributionFormOpen(false)} style={{ background: 'none', border: 'none', fontSize: 22, color: 'var(--c-tx-s)', cursor: 'pointer' }}>✕</button>
+          </div>
+
+          <form onSubmit={handleDistributionSave} style={{ display: 'grid', gap: 14 }}>
+            <div style={{ padding: 10, borderRadius: 10, border: '1px solid #DDE3EA', background: '#F8FAFC' }}>
+              <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8 }}>1. 기본정보</div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                <input value={distributionForm.title} onChange={(event) => setDistributionForm(prev => ({ ...prev, title: event.target.value }))} placeholder="상품명" className="su-input" required />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <select value={distributionForm.category} onChange={(event) => setDistributionForm(prev => ({ ...prev, category: event.target.value }))} className="su-input">
+                    <option value="food">식품</option>
+                    <option value="daily">생활용품</option>
+                    <option value="health">건강</option>
+                    <option value="digital">디지털</option>
+                    <option value="appliance">가전</option>
+                    <option value="fashion">패션</option>
+                    <option value="local-special">지역특산</option>
+                    <option value="group-buy">공동구매</option>
+                  </select>
+                  <select value={distributionForm.productType} onChange={(event) => setDistributionForm(prev => ({ ...prev, productType: event.target.value }))} className="su-input">
+                    <option value="general">일반상품</option>
+                    <option value="service">서비스</option>
+                    <option value="reservation">예약상품</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ padding: 10, borderRadius: 10, border: '1px solid #DDE3EA', background: '#F8FAFC' }}>
+              <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8 }}>2. 이미지/영상</div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-tx-s)' }}>대표 이미지 (파일 업로드 기본, URL 보조)</div>
+                {distributionForm.imageUrl && (
+                  <div style={{ marginBottom: 4 }}>
+                    <img src={distributionForm.imageUrl} alt="대표" style={{ width: 56, height: 56, borderRadius: 6, objectFit: 'cover', border: '1px solid #DDE3EA' }} />
+                  </div>
+                )}
+                <input type="file" accept="image/*" className="su-input" onChange={(event) => setDistributionMainFile(event.target.files?.[0] || null)} />
+                <input value={distributionForm.imageUrl} onChange={(event) => setDistributionForm(prev => ({ ...prev, imageUrl: event.target.value }))} placeholder="대표 이미지 URL (선택)" className="su-input" />
+
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-tx-s)' }}>추가 이미지 (최대 3장)</div>
+                {distributionForm.extraImageUrls.length > 0 && (
+                  <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {distributionForm.extraImageUrls.map((url, idx) => (
+                      <div key={idx} style={{ position: 'relative' }}>
+                        <img src={url} alt={`추가${idx + 1}`} style={{ width: 56, height: 56, borderRadius: 6, objectFit: 'cover', border: '1px solid #DDE3EA' }} />
+                        <button type="button" onClick={() => setDistributionForm(prev => ({ ...prev, extraImageUrls: prev.extraImageUrls.filter((_, i) => i !== idx) }))} style={{ position: 'absolute', top: -4, right: -4, width: 18, height: 18, borderRadius: '50%', border: 'none', background: '#dc2626', color: '#fff', fontSize: 11, lineHeight: '18px', cursor: 'pointer', padding: 0 }}>×</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {distributionForm.extraImageUrls.length < 3 && (
+                  <input type="file" accept="image/*" multiple className="su-input" onChange={(event) => {
+                    const files = Array.from(event.target.files || []);
+                    const remaining = 3 - distributionForm.extraImageUrls.length;
+                    setDistributionExtraFiles(files.slice(0, remaining));
+                  }} />
+                )}
+                {distributionForm.extraImageUrls.length >= 3 && (
+                  <div style={{ fontSize: 11, color: '#92400E' }}>추가 이미지 3장이 모두 등록되었습니다.</div>
+                )}
+
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-tx-s)' }}>영상 링크 (유튜브/틱톡 URL)</div>
+                <input value={distributionForm.videoUrl} onChange={(event) => setDistributionForm(prev => ({ ...prev, videoUrl: event.target.value }))} placeholder="https://..." className="su-input" />
+
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--c-tx-s)' }}>상세정보 PDF (파일 업로드)</div>
+                <input type="file" accept=".pdf,application/pdf" className="su-input" onChange={(event) => setDistributionPdfFile(event.target.files?.[0] || null)} />
+                {distributionForm.pdfUrl && <div style={{ fontSize: 11, color: '#64748b', marginTop: 2 }}>현재: {distributionForm.pdfUrl}</div>}
+              </div>
+            </div>
+
+            <div style={{ padding: 10, borderRadius: 10, border: '1px solid #DDE3EA', background: '#F8FAFC' }}>
+              <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8 }}>3. 판매정보</div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                <input type="number" min={0} value={distributionForm.price} onChange={(event) => setDistributionForm(prev => ({ ...prev, price: event.target.value }))} placeholder="가격 (포인트)" className="su-input" />
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <input type="number" min={0} value={distributionForm.quantity} onChange={(event) => setDistributionForm(prev => ({ ...prev, quantity: event.target.value }))} placeholder="재고 수량" className="su-input" disabled={distributionForm.unlimitedStock} />
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 8px', border: '1px solid #DDE3EA', borderRadius: 8, background: '#fff', fontSize: 13 }}>
+                    <input type="checkbox" checked={!!distributionForm.unlimitedStock} onChange={(event) => setDistributionForm(prev => ({ ...prev, unlimitedStock: event.target.checked }))} />
+                    무제한 재고
+                  </label>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <select value={distributionForm.status} onChange={(event) => setDistributionForm(prev => ({ ...prev, status: event.target.value }))} className="su-input">
+                    <option value="available">판매중</option>
+                    <option value="soldout">품절</option>
+                  </select>
+                  <select value={distributionForm.visibility} onChange={(event) => setDistributionForm(prev => ({ ...prev, visibility: event.target.value }))} className="su-input">
+                    <option value="public">공개</option>
+                    <option value="hidden">숨김</option>
+                  </select>
+                </div>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 8px', border: '1px solid #DDE3EA', borderRadius: 8, background: '#fff', fontSize: 13 }}>
+                    <input type="checkbox" checked={!!distributionForm.featured} onChange={(event) => setDistributionForm(prev => ({ ...prev, featured: event.target.checked }))} />
+                    추천 상품
+                  </label>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 8px', border: '1px solid #DDE3EA', borderRadius: 8, background: '#fff', fontSize: 13 }}>
+                    <input type="checkbox" checked={!!distributionForm.todayDeal} onChange={(event) => setDistributionForm(prev => ({ ...prev, todayDeal: event.target.checked }))} />
+                    오늘의 특가
+                  </label>
+                </div>
+              </div>
+            </div>
+
+            <div style={{ padding: 10, borderRadius: 10, border: '1px solid #DDE3EA', background: '#F8FAFC' }}>
+              <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8 }}>4. 배송/수령</div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                <select value={distributionForm.receiveMethod} onChange={(event) => setDistributionForm(prev => ({ ...prev, receiveMethod: event.target.value }))} className="su-input">
+                  <option value="delivery">택배</option>
+                  <option value="pickup">방문</option>
+                  <option value="online">온라인</option>
+                </select>
+                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8 }}>
+                  <div className="su-input" style={{ display: 'flex', alignItems: 'center', color: 'var(--c-tx-s)' }}>판매자: {autoSellerName}</div>
+                  <div className="su-input" style={{ display: 'flex', alignItems: 'center', color: 'var(--c-tx-s)' }}>지역: {autoRegionLabel}</div>
+                </div>
+                <div style={{ fontSize: 11, color: 'var(--c-tx-s)' }}>productId/sellerId/regionId는 시스템에서 자동 설정됩니다.</div>
+              </div>
+            </div>
+
+            <div style={{ padding: 10, borderRadius: 10, border: '1px solid #DDE3EA', background: '#F8FAFC' }}>
+              <div style={{ fontWeight: 800, fontSize: 13, marginBottom: 8 }}>5. 상세정보</div>
+              <div style={{ display: 'grid', gap: 8 }}>
+                <textarea value={distributionForm.description} onChange={(event) => setDistributionForm(prev => ({ ...prev, description: event.target.value }))} placeholder="상품 설명" className="su-input" rows={3} />
+                <textarea value={distributionForm.sellerIntro} onChange={(event) => setDistributionForm(prev => ({ ...prev, sellerIntro: event.target.value }))} placeholder="판매자 소개" className="su-input" rows={2} />
+              </div>
+            </div>
+
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+              <div style={{ fontSize: 12, color: 'var(--c-tx-s)' }}>포인트 결제만 활성화, 카드결제는 오픈예정</div>
+              <button type="submit" className="su-primaryBtn" disabled={distributionSaving}>{distributionSaving ? '저장 중...' : (editingDistributionId ? '수정 저장' : '상품 등록')}</button>
+            </div>
+          </form>
         </div>
       </div>
     );
@@ -3111,14 +3722,25 @@ export default function My() {
               </button>
               <button
                 type="button"
-                onClick={() => setMyTab('activity')}
+                onClick={() => setHomeView(homeView === 'supply' ? 'main' : 'supply')}
                 className="my-btn--ghost"
                 style={{
-                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '18px 0', borderRadius: 14, border: '1px solid var(--c-border)', background: 'var(--c-surface)', cursor: 'pointer', fontWeight: 700, fontSize: 13, color: 'var(--c-tx-h)'
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '18px 0', borderRadius: 14, border: '1px solid var(--c-border)', background: homeView === 'supply' ? 'var(--c-primary)' : 'var(--c-surface)', cursor: 'pointer', fontWeight: 700, fontSize: 13, color: homeView === 'supply' ? '#fff' : 'var(--c-tx-h)'
                 }}
               >
                 <span style={{ fontSize: 26 }}>📦</span>
                 <span>보급지원</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setHomeView(homeView === 'distribution' ? 'main' : 'distribution')}
+                className="my-btn--ghost"
+                style={{
+                  display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, padding: '18px 0', borderRadius: 14, border: '1px solid var(--c-border)', background: homeView === 'distribution' ? 'var(--c-primary)' : 'var(--c-surface)', cursor: 'pointer', fontWeight: 700, fontSize: 13, color: homeView === 'distribution' ? '#fff' : 'var(--c-tx-h)'
+                }}
+              >
+                <span style={{ fontSize: 26 }}>🛍️</span>
+                <span>유통지원</span>
               </button>
             </div>
           </section>
@@ -3127,6 +3749,8 @@ export default function My() {
           {/* (임시 명함 박스 제거, 기존 명함 기능은 유지) */}
           {/* 보급지원 박스 */}
           {/* 최근 포인트 관리 내역(보급지원 내역 상단) 제거됨 */}
+          {homeView === 'main' && (
+          <>
           <section className="su-panel">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
               <div className="su-sectionTitle" style={{ marginBottom: 0 }}>최근 포인트 내역</div>
@@ -3283,6 +3907,207 @@ export default function My() {
               </div>
             )}
           </section>
+          </>
+          )}
+          {homeView === 'supply' && (
+          <section className="su-panel">
+            <button type="button" onClick={() => setHomeView('main')} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-primary)', fontWeight: 700, fontSize: 13, padding: '0 0 10px 0' }}>← 홈으로</button>
+            <div className="su-sectionTitle">📦 보급지원 / 구매내역</div>
+
+            {/* 보급지원 신청 내역 */}
+            <div className="su-card" style={{ marginBottom: 10 }}>
+              <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>🎁 내 신청 내역</span>
+                {supplyRequests.filter(r => r.status === 'PENDING' || r.status === 'REQUESTED').length > 1 && (
+                  <button onClick={() => setShowAllRequestsModal(true)} style={{ padding: '4px 10px', fontSize: 12, background: 'rgba(59,130,246,0.1)', border: '1px solid rgba(59,130,246,0.3)', borderRadius: 6, color: '#3b82f6', cursor: 'pointer', fontWeight: 600 }}>전체보기</button>
+                )}
+              </div>
+              {!supplyData ? (
+                <div style={{ opacity: 0.5, textAlign: 'center', padding: '12px 0' }}>로딩 중...</div>
+              ) : (() => {
+                const pendingRequests = supplyRequests.filter(r => r.status === 'PENDING' || r.status === 'REQUESTED');
+                const displayRequests = pendingRequests.slice(0, 1);
+                return displayRequests.length > 0 ? (
+                  displayRequests.map((r, idx) => (
+                    <div key={r.requestId || r.id || `hsupply-req-${idx}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #DDE3EA' }}>
+                      <div>
+                        <div style={{ fontWeight: 600 }}>{r.itemName || r.item || '보급품'}</div>
+                        <div style={{ fontSize: 12, opacity: 0.7, marginTop: 2 }}>현재 상태: 확인중입니다</div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        <span style={{ padding: '4px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700, background: 'rgba(234,179,8,0.15)', color: '#92650A' }}>대기중</span>
+                        <span style={{ fontSize: 12, opacity: 0.6 }}>{new Date(r.createdAt).toLocaleDateString()}</span>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ opacity: 0.7 }}>신청 내역이 없습니다</div>
+                );
+              })()}
+            </div>
+
+            {/* 보급품 등록 */}
+            {isSupplyManager && (
+              <div className="su-card" style={{ marginBottom: 10 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <div style={{ fontSize: 13, fontWeight: 800 }}>➕ 보급품 등록</div>
+                  <div>
+                    <button onClick={() => { setEditingOfferId(null); setOfferForm({ item: '', manager: userData?.name || '', contact: userData?.phone || '', price: '', detail: '', image: '' }); setShowOfferModal(true); }} className="su-primaryBtn" style={{ padding: '8px 12px' }}>등록</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* 내 보급품 목록 */}
+            {isSupplyManager && (
+              <div className="su-card" style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 10 }}>📦 내 보급품 목록</div>
+                {mySupplyItems === null ? (
+                  <div style={{ opacity: 0.5, fontSize: 13 }}>로딩 중...</div>
+                ) : mySupplyItems.length === 0 ? (
+                  <div style={{ opacity: 0.5, fontSize: 13 }}>등록한 보급품이 없습니다.</div>
+                ) : (
+                  <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                    {mySupplyItems.map(item => {
+                      const id = item.id;
+                      const isEditing = editingMyItemId === id;
+                      const STATUS_KO = { available: '가용', reserved: '예약', completed: '완료', scheduled: '신청예정', '등록': '등록', '신청': '신청' };
+                      const STATUS_COLOR = { available: '#22c55e', reserved: '#a855f7', completed: '#3b82f6', scheduled: '#d97706', '등록': '#0C5460', '신청': '#f59e0b' };
+                      return (
+                        <div key={id} style={{ padding: '10px 12px', background: '#F8FAFC', borderRadius: 8, border: '1px solid #DDE3EA' }}>
+                          {isEditing ? (
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                              <input value={editMyForm.title} onChange={e => setEditMyForm(f => ({ ...f, title: e.target.value }))} placeholder="물품명" style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: 13, width: '100%' }} />
+                              <input value={editMyForm.description} onChange={e => setEditMyForm(f => ({ ...f, description: e.target.value }))} placeholder="설명" style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: 13, width: '100%' }} />
+                              <div style={{ display: 'flex', gap: 6 }}>
+                                <input type="number" min={0} value={editMyForm.quantity} onChange={e => setEditMyForm(f => ({ ...f, quantity: Number(e.target.value) }))} placeholder="수량" style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: 13, width: 70 }} />
+                                <select value={editMyForm.status} onChange={e => setEditMyForm(f => ({ ...f, status: e.target.value }))} style={{ padding: '6px 8px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: 13, flex: 1 }}>
+                                  <option value="available">가용</option><option value="scheduled">신청예정</option><option value="reserved">예약</option><option value="completed">완료</option>
+                                </select>
+                              </div>
+                              <div style={{ display: 'flex', gap: 6, justifyContent: 'flex-end' }}>
+                                <button onClick={() => handleMyItemSave(id)} style={{ padding: '6px 14px', background: '#0C5460', color: '#fff', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>저장</button>
+                                <button onClick={() => { setEditingMyItemId(null); setEditMyForm({}); }} style={{ padding: '6px 14px', background: '#F0F2F4', color: '#637074', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: 'pointer' }}>취소</button>
+                              </div>
+                            </div>
+                          ) : (
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                              <div>
+                                <div style={{ fontWeight: 700, fontSize: 13 }}>{item.title}</div>
+                                {item.description && <div style={{ fontSize: 12, opacity: 0.6, marginTop: 2 }}>{item.description}</div>}
+                                <div style={{ fontSize: 12, marginTop: 4, display: 'flex', gap: 8 }}>
+                                  <span>수량 <strong>{item.quantity ?? 0}</strong></span>
+                                  <span style={{ color: STATUS_COLOR[item.status] || '#637074', fontWeight: 600 }}>{STATUS_KO[item.status] || item.status}</span>
+                                </div>
+                              </div>
+                              <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                                <button onClick={() => handleMyItemSetStatus(item, 'available')} disabled={item.status === 'available'} style={{ padding: '5px 10px', background: item.status === 'available' ? '#dcfce7' : 'transparent', color: '#16a34a', border: '1px solid #16a34a', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: item.status === 'available' ? 'default' : 'pointer', opacity: item.status === 'available' ? 1 : 0.7 }}>활성화</button>
+                                <button onClick={() => handleMyItemSetStatus(item, 'scheduled')} disabled={item.status === 'scheduled'} style={{ padding: '5px 10px', background: item.status === 'scheduled' ? '#FEF3C7' : 'transparent', color: '#d97706', border: '1px solid #d97706', borderRadius: 6, fontSize: 12, fontWeight: 700, cursor: item.status === 'scheduled' ? 'default' : 'pointer', opacity: item.status === 'scheduled' ? 1 : 0.7 }}>신청예정</button>
+                                <button onClick={() => handleMyItemEdit(item)} style={{ padding: '5px 12px', background: '#E8F4FD', color: '#0C5460', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>수정</button>
+                                <button onClick={() => handleMyItemDelete(id)} style={{ padding: '5px 12px', background: '#FEF2F2', color: '#DC2626', border: 'none', borderRadius: 6, fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>삭제</button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* 구매 내역 */}
+            <div className="su-card">
+              <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span>🛒 구매 내역</span>
+                {(() => {
+                  const completedRequests = supplyRequests.filter(r => r.status === 'COMPLETED' || r.status === 'DONE' || r.status === 'CONFIRMED');
+                  const combinedPurchases = [...supplyPurchases, ...completedRequests.map(r => ({ ...r, item: r.itemName || r.item, amount: r.amount || 0, status: '구매완료' }))];
+                  return combinedPurchases.length > 1 ? (
+                    <button onClick={() => setShowAllPurchasesModal(true)} style={{ padding: '4px 10px', fontSize: 12, background: 'rgba(34,197,94,0.1)', border: '1px solid rgba(34,197,94,0.3)', borderRadius: 6, color: '#22c55e', cursor: 'pointer', fontWeight: 600 }}>전체보기</button>
+                  ) : null;
+                })()}
+              </div>
+              {(() => {
+                const completedRequests = supplyRequests.filter(r => r.status === 'COMPLETED' || r.status === 'DONE' || r.status === 'CONFIRMED');
+                const combinedPurchases = [...supplyPurchases, ...completedRequests.map(r => ({ ...r, item: r.itemName || r.item, amount: r.amount || 0, status: '구매완료' }))];
+                const displayPurchases = combinedPurchases.slice(0, 1);
+                return displayPurchases.length > 0 ? (
+                  displayPurchases.map((p, idx) => (
+                    <div key={p.purchaseId || p.id || `hsupply-purch-${idx}`} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #DDE3EA' }}>
+                      <div>
+                        <div style={{ fontWeight: 600 }}>{p.item || p.itemName || '보급품'}</div>
+                        <div style={{ fontSize: 12, opacity: 0.6, marginTop: 2 }}>{new Date(p.completedAt || p.createdAt).toLocaleDateString()}</div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                        {p.amount > 0 && <span style={{ fontWeight: 700 }}>{formatNumber(p.amount)}원</span>}
+                        <span style={{ padding: '4px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700, background: 'rgba(34,197,94,0.15)', color: '#16A34A' }}>완료</span>
+                      </div>
+                    </div>
+                  ))
+                ) : (
+                  <div style={{ opacity: 0.7 }}>구매 내역이 없습니다</div>
+                );
+              })()}
+            </div>
+
+            {/* 신청자 관리 */}
+            {isSupplyManager && (
+              <div style={{ marginTop: 24, paddingTop: 16, borderTop: '1px solid #DDE3EA' }}>
+                <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 12 }}>📬 신청자 관리</div>
+                <div style={{ display: 'flex', gap: 8, marginBottom: 12 }}>
+                  {['all', 'pending', 'completed'].map(tab => (
+                    <button key={tab} onClick={() => setManagedRequestTab(tab)} style={{ padding: '6px 12px', borderRadius: 20, border: 'none', background: managedRequestTab === tab ? '#0C5460' : '#F0F2F4', color: managedRequestTab === tab ? '#fff' : '#637074', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}>
+                      {tab === 'all' ? '전체' : tab === 'pending' ? '대기' : '완료'}
+                    </button>
+                  ))}
+                </div>
+                {managedRequests === null ? (
+                  <div style={{ padding: 20, textAlign: 'center', opacity: 0.5 }}>로딩 중...</div>
+                ) : managedRequests.length === 0 ? (
+                  <div style={{ padding: 20, textAlign: 'center', opacity: 0.5 }}>신청 내역이 없습니다.</div>
+                ) : (
+                  (() => {
+                    const filtered = managedRequests.filter(r => {
+                      if (managedRequestTab === 'all') return true;
+                      if (managedRequestTab === 'pending') return r.status === 'PENDING' || r.status === 'REQUESTED';
+                      if (managedRequestTab === 'completed') return r.status === 'COMPLETED' || r.status === 'DONE';
+                      return true;
+                    });
+                    if (filtered.length === 0) return <div style={{ padding: 20, textAlign: 'center', opacity: 0.5 }}>해당 상태의 신청이 없습니다.</div>;
+                    return (
+                      <div style={{ display: 'grid', gap: 8 }}>
+                        {filtered.map(r => (
+                          <div key={r.id} className="su-card" style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                              <div>
+                                <div style={{ fontWeight: 700, fontSize: 14 }}>{r.itemName || '(품목 미지정)'}</div>
+                                <div style={{ fontSize: 13, marginTop: 4 }}>
+                                  <span style={{ fontWeight: 600 }}>{r.requesterName}</span>
+                                  <span style={{ opacity: 0.6 }}> • {r.createdAt ? new Date(r.createdAt).toLocaleDateString('ko-KR', { year: 'numeric', month: 'long', day: 'numeric' }) : '날짜 미지정'}</span>
+                                </div>
+                                {r.requesterContact && <div style={{ fontSize: 12, opacity: 0.8, marginTop: 2 }}>📞 {r.requesterContact}</div>}
+                                {r.message && <div style={{ fontSize: 12, opacity: 0.7, marginTop: 4 }}>"{r.message}"</div>}
+                              </div>
+                              <span style={{ padding: '4px 8px', borderRadius: 4, fontSize: 11, fontWeight: 700, background: (r.status === 'COMPLETED' || r.status === 'DONE') ? 'rgba(34,197,94,0.15)' : 'rgba(234,179,8,0.15)', color: (r.status === 'COMPLETED' || r.status === 'DONE') ? '#16A34A' : '#92650A' }}>
+                                {(r.status === 'COMPLETED' || r.status === 'DONE') ? '완료됨' : '대기중'}
+                              </span>
+                            </div>
+                            {(r.status === 'PENDING' || r.status === 'REQUESTED') && (
+                              <div style={{ display: 'flex', justifyContent: 'flex-end', paddingTop: 8, borderTop: '1px solid #DDE3EA' }}>
+                                <button onClick={() => handleCompleteRequest(r.id)} style={{ padding: '6px 12px', background: '#0C5460', color: '#fff', borderRadius: 6, fontSize: 12, fontWeight: 600, border: 'none', cursor: 'pointer' }}>완료 처리</button>
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()
+                )}
+              </div>
+            )}
+          </section>
+          )}
         </div>
       )}
 
@@ -3580,7 +4405,91 @@ export default function My() {
                   </div>
                 )}
                 <button type="button" className="su-chip" style={{ marginTop: 10 }} onClick={() => setAllPayoutsModalOpen(true)}>전체 내역 보기</button>
+
               </section>
+            )}
+
+            {/* ── 상점 예약 관리 (별도 패널) ── */}
+            {walletView === 'shop' && (
+              <section className="su-panel" style={{ marginTop: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+                  <div className="su-sectionTitle" style={{ marginBottom: 0 }}>📅 예약 관리</div>
+                  <span style={{ fontSize: 12, color: 'var(--c-tx-s)', fontWeight: 700 }}>{shopReservations.length}건</span>
+                </div>
+                {shopRsvLoading ? (
+                  <div style={{ textAlign: 'center', opacity: 0.5, padding: 12 }}>로딩 중...</div>
+                ) : shopReservations.length === 0 ? (
+                  <div style={{ textAlign: 'center', opacity: 0.6, padding: 16, border: '1px dashed var(--c-border)', borderRadius: 12 }}>아직 예약이 없습니다.</div>
+                ) : (
+                  <div style={{ display: 'grid', gap: 8 }}>
+                    {shopReservations.map((rsv, idx) => (
+                      <div key={rsv.id || `rsv-${idx}`} style={{ border: '1px solid var(--c-border)', borderRadius: 14, padding: 12, background: rsv.status === 'pending' ? '#fffbeb' : 'var(--c-surface)' }}>
+                        <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                          <div style={{ fontWeight: 800, fontSize: 14 }}>{rsv.memberName || rsv.guestName || '고객'}</div>
+                          <span style={{
+                            padding: '3px 10px', borderRadius: 8, fontSize: 11, fontWeight: 800,
+                            background: rsv.status === 'pending' ? '#fef3c7' : rsv.status === 'confirmed' ? '#dcfce7' : rsv.status === 'rejected' ? '#fee2e2' : '#f3f4f6',
+                            color: rsv.status === 'pending' ? '#92400e' : rsv.status === 'confirmed' ? '#166534' : rsv.status === 'rejected' ? '#b91c1c' : '#475569',
+                          }}>
+                            {rsv.status === 'pending' ? '대기중' : rsv.status === 'confirmed' ? '확정' : rsv.status === 'rejected' ? '거절' : rsv.status === 'cancelled' ? '취소됨' : rsv.status}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 13, color: '#475569', marginTop: 4 }}>
+                          📅 {rsv.reservedDate} {rsv.reservedTime} · 👥 {rsv.numberOfPeople || 1}명
+                        </div>
+                        {rsv.serviceName && <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>서비스: {rsv.serviceName}</div>}
+                        {(rsv.memberPhone || rsv.guestPhone) && <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>📞 {rsv.memberPhone || rsv.guestPhone}</div>}
+                        {rsv.notes && <div style={{ fontSize: 12, color: '#64748b', marginTop: 2 }}>메모: {rsv.notes}</div>}
+                        {rsv.status === 'pending' && (
+                          <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                            <button type="button" onClick={async () => {
+                              try {
+                                await storageAdapter.updateReservationStatus(rsv.id, 'confirmed', null, effectiveUserId);
+                                setShopReservations(prev => prev.map(r => r.id === rsv.id ? { ...r, status: 'confirmed' } : r));
+                              } catch (e) { window.alert('승인 실패: ' + e.message); }
+                            }} style={{ flex: 1, padding: '10px', borderRadius: 12, border: 'none', background: '#22c55e', color: '#fff', fontWeight: 800, fontSize: 13, cursor: 'pointer' }}>✅ 승인</button>
+                            <button type="button" onClick={() => setRejectModal({ open: true, rsvId: rsv.id, reason: '' })} style={{ flex: 1, padding: '10px', borderRadius: 12, border: '1.5px solid #e2e8f0', background: '#fff', color: '#ef4444', fontWeight: 800, fontSize: 13, cursor: 'pointer' }}>❌ 거절</button>
+                          </div>
+                        )}
+                        <button type="button" onClick={async () => {
+                          if (!window.confirm('이 예약을 삭제하시겠습니까?')) return;
+                          try {
+                            await storageAdapter.deleteReservation(rsv.id, effectiveUserId);
+                            setShopReservations(prev => prev.filter(r => r.id !== rsv.id));
+                          } catch (e) { window.alert('삭제 실패: ' + e.message); }
+                        }} style={{ marginTop: 8, padding: '6px 0', width: '100%', borderRadius: 10, border: '1px solid #e2e8f0', background: '#f8fafc', color: '#94a3b8', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>🗑️ 삭제</button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
+
+            {/* 거절 사유 모달 */}
+            {rejectModal.open && (
+              <div style={{ position: 'fixed', inset: 0, zIndex: 1200, background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(4px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }} onClick={() => setRejectModal({ open: false, rsvId: null, reason: '' })}>
+                <div onClick={e => e.stopPropagation()} style={{ width: '100%', maxWidth: 380, background: '#fff', borderRadius: 20, padding: '24px 20px', boxShadow: '0 8px 40px rgba(0,0,0,0.2)' }}>
+                  <div style={{ fontSize: 17, fontWeight: 900, marginBottom: 14, color: '#0f172a' }}>❌ 예약 거절</div>
+                  <div style={{ fontSize: 13, color: '#64748b', marginBottom: 10 }}>거절 사유를 입력해주세요 (선택)</div>
+                  <textarea
+                    value={rejectModal.reason}
+                    onChange={e => setRejectModal(p => ({ ...p, reason: e.target.value }))}
+                    placeholder="예: 해당 시간은 이미 마감되었습니다"
+                    rows={3}
+                    style={{ width: '100%', padding: '10px 12px', border: '1.5px solid #e2e8f0', borderRadius: 12, fontSize: 14, resize: 'vertical', background: '#fff', color: '#0f172a' }}
+                  />
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 10, marginTop: 16 }}>
+                    <button type="button" onClick={() => setRejectModal({ open: false, rsvId: null, reason: '' })} style={{ padding: 12, borderRadius: 14, border: '1.5px solid #e2e8f0', background: '#f8fafc', fontWeight: 800, fontSize: 14, cursor: 'pointer', color: '#64748b' }}>취소</button>
+                    <button type="button" onClick={async () => {
+                      try {
+                        await storageAdapter.updateReservationStatus(rejectModal.rsvId, 'rejected', rejectModal.reason || null, effectiveUserId);
+                        setShopReservations(prev => prev.map(r => r.id === rejectModal.rsvId ? { ...r, status: 'rejected', rejectReason: rejectModal.reason } : r));
+                        setRejectModal({ open: false, rsvId: null, reason: '' });
+                      } catch (e) { window.alert('거절 실패: ' + e.message); }
+                    }} style={{ padding: 12, borderRadius: 14, border: 'none', background: '#ef4444', color: '#fff', fontWeight: 800, fontSize: 14, cursor: 'pointer' }}>거절 확인</button>
+                  </div>
+                </div>
+              </div>
             )}
 
             {/* VIP 상품권 (복구: 회원 전송/상점 결제 모달 플로우) */}
@@ -3903,6 +4812,56 @@ export default function My() {
 
       {myTab === 'activity' && (
         <>
+          {/* 내 예약 목록 */}
+          <section className="su-panel">
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
+              <div className="su-sectionTitle" style={{ marginBottom: 0 }}>📅 내 예약</div>
+              <span style={{ fontSize: 12, color: 'var(--c-tx-s)', fontWeight: 700 }}>{myReservations.length}건</span>
+            </div>
+            {myRsvLoading ? (
+              <div style={{ textAlign: 'center', opacity: 0.5, padding: 16 }}>로딩 중...</div>
+            ) : myReservations.length === 0 ? (
+              <div style={{ textAlign: 'center', opacity: 0.6, padding: 16, fontSize: 14 }}>예약 내역이 없습니다.</div>
+            ) : (
+              <div style={{ display: 'grid', gap: 10 }}>
+                {myReservations.map(rsv => (
+                  <div key={rsv.reservationId || rsv.reservation_id} style={{
+                    background: rsv.status === 'pending' ? '#fffbe6' : rsv.status === 'confirmed' ? '#e6f7ef' : rsv.status === 'rejected' ? '#fff0f0' : 'var(--c-surface)',
+                    borderRadius: 12, padding: 14, border: '1px solid var(--c-border)'
+                  }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <span style={{ fontWeight: 700, fontSize: 15 }}>{rsv.shopName || rsv.shop_name || '상점'}</span>
+                      <span style={{
+                        fontSize: 11, fontWeight: 700, padding: '2px 8px', borderRadius: 8,
+                        background: rsv.status === 'pending' ? '#ffd666' : rsv.status === 'confirmed' ? '#52c41a' : rsv.status === 'rejected' ? '#ff4d4f' : '#aaa',
+                        color: '#fff'
+                      }}>
+                        {rsv.status === 'pending' ? '대기중' : rsv.status === 'confirmed' ? '확정' : rsv.status === 'rejected' ? '거절' : rsv.status === 'cancelled' ? '취소됨' : rsv.status}
+                      </span>
+                    </div>
+                    <div style={{ fontSize: 13, color: 'var(--c-tx-s)', display: 'grid', gap: 3 }}>
+                      <div>📆 {(() => { const d = rsv.reservedDate || rsv.reserved_date || ''; return d.length > 10 ? d.slice(0, 10) : d; })()} {rsv.reservedTime || rsv.reserved_time}</div>
+                      {(rsv.guestName || rsv.guest_name) && <div>👤 {rsv.guestName || rsv.guest_name}</div>}
+                      {(rsv.guestPhone || rsv.guest_phone) && <div>📞 {rsv.guestPhone || rsv.guest_phone}</div>}
+                      {(rsv.serviceName || rsv.service_name) && <div>🏷️ {rsv.serviceName || rsv.service_name}</div>}
+                      {(rsv.numberOfPeople || rsv.number_of_people) && <div>👥 {rsv.numberOfPeople || rsv.number_of_people}명</div>}
+                      {rsv.status === 'rejected' && (rsv.rejectReason || rsv.reject_reason) && (
+                        <div style={{ color: '#ff4d4f', marginTop: 4 }}>거절 사유: {rsv.rejectReason || rsv.reject_reason}</div>
+                      )}
+                    </div>
+                    <button type="button" onClick={async () => {
+                      if (!window.confirm('이 예약을 삭제하시겠습니까?')) return;
+                      try {
+                        await storageAdapter.deleteReservation(rsv.id, effectiveUserId);
+                        setMyReservations(prev => prev.filter(r => r.id !== rsv.id));
+                      } catch (e) { window.alert('삭제 실패: ' + e.message); }
+                    }} style={{ marginTop: 8, padding: '6px 0', width: '100%', borderRadius: 10, border: '1px solid #e2e8f0', background: '#f8fafc', color: '#94a3b8', fontWeight: 700, fontSize: 12, cursor: 'pointer' }}>🗑️ 삭제</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+
           {/* 전체 미션/이벤트 참여내역 */}
           {false && <section className="su-panel">
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 }}>
@@ -4179,8 +5138,8 @@ export default function My() {
 
       
 
-      {/* ────────── ④ 보급지원 / 구매내역 ────────── */}
-      {myTab === 'activity' && (
+      {/* ────────── ④ 보급지원 / 구매내역 (홈 탭 보급지원 박스로 이동) ────────── */}
+      {false && myTab === 'activity' && (
       <section className="su-panel">
         <div className="su-sectionTitle">
           📦 보급지원 / 구매내역
@@ -4728,6 +5687,311 @@ export default function My() {
       </section>
       )}
 
+      {myTab === 'home' && homeView === 'distribution' && (
+      <section className="su-panel">
+        <button type="button" onClick={() => setHomeView('main')} style={{ display: 'flex', alignItems: 'center', gap: 6, background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-primary)', fontWeight: 700, fontSize: 13, padding: '0 0 10px 0' }}>← 홈으로</button>
+        <div className="su-sectionTitle">🛍️ 유통지원 / 판매관리</div>
+
+        <div className="su-card" style={{ marginBottom: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <div style={{ fontSize: 13, fontWeight: 700 }}>마이오피스에서 유통 상품 등록/관리</div>
+            <div style={{ display: 'flex', gap: 8 }}>
+              <button type="button" onClick={() => navigate('/distribution')} className="su-btnGhost">유통지원 홈</button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isDistributionManager) {
+                    setToast({ open: true, message: '관리자에게 유통지원 권한을 요청해 주세요.', type: 'warning' });
+                    return;
+                  }
+                  openCreateDistributionForm();
+                }}
+                className="su-primaryBtn"
+              >
+                유통상품 등록
+              </button>
+            </div>
+          </div>
+          {!isDistributionManager && (
+            <div style={{ marginTop: 8, fontSize: 12, color: '#b45309', background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.35)', borderRadius: 8, padding: '8px 10px' }}>
+              현재 계정은 유통지원 권한이 없습니다. 관리자 회원관리에서 "유통지원 권한" 체크 후 등록 가능합니다.
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, minmax(0, 1fr))', gap: 8, marginBottom: 10 }}>
+          <div className="su-card">
+            <div style={{ fontSize: 12, opacity: 0.75 }}>내 등록 상품</div>
+            <div style={{ fontSize: 19, fontWeight: 800, marginTop: 4 }}>{distributionItems.length}</div>
+          </div>
+          <div className="su-card">
+            <div style={{ fontSize: 12, opacity: 0.75 }}>판매 완료</div>
+            <div style={{ fontSize: 19, fontWeight: 800, marginTop: 4 }}>
+              {distributionManagedOrders.filter((row) => ['COMPLETED'].includes(String(row?.orderStatus || row?.order_status || '').toUpperCase())).length}
+            </div>
+          </div>
+          <div className="su-card">
+            <div style={{ fontSize: 12, opacity: 0.75 }}>주문/신청 내역</div>
+            <div style={{ fontSize: 19, fontWeight: 800, marginTop: 4 }}>{distributionOrders.length}</div>
+          </div>
+          <div className="su-card">
+            <div style={{ fontSize: 12, opacity: 0.75 }}>결제 수단</div>
+            <div style={{ fontSize: 12, fontWeight: 700, marginTop: 6, color: '#0f766e' }}>포인트 결제 활성</div>
+            <div style={{ fontSize: 11, opacity: 0.65, marginTop: 2 }}>카드결제 오픈예정</div>
+          </div>
+        </div>
+
+        <div className="su-card">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 800 }}>◆ 내 유통 주문내역</div>
+            {distributionOrders.length > 5 && (
+              <button type="button" onClick={() => setShowAllOrders((v) => !v)} style={{ fontSize: 11, color: '#0369a1', background: '#e0f2fe', border: '1px solid #bae6fd', borderRadius: 20, cursor: 'pointer', fontWeight: 700, padding: '3px 10px', display: 'inline-flex', alignItems: 'center', gap: 3 }}>{showAllOrders ? '▲ 접기' : `▼ 전체보기 (${distributionOrders.length})`}</button>
+            )}
+          </div>
+          {distributionLoading ? (
+            <div style={{ opacity: 0.6 }}>로딩 중...</div>
+          ) : distributionOrders.length === 0 ? (
+            <div style={{ opacity: 0.7 }}>주문 내역이 없습니다.</div>
+          ) : (
+            <div style={{ display: 'grid', gap: 8 }}>
+              {(showAllOrders ? distributionOrders : distributionOrders.slice(0, 5)).map((row) => {
+                const myOrderStatus = String(row?.orderStatus || row?.order_status || 'ORDERED').toUpperCase();
+                const myReceiveMethod = String(row?.receiveMethod || row?.receive_method || 'delivery').toLowerCase();
+                const myMsgMeta = parseMyOrderMessageMeta(row?.message);
+                const buyerConfirmedAt = row?.buyerConfirmedAt || row?.buyer_confirmed_at;
+                const withinReturnWindow = buyerConfirmedAt
+                  ? (Date.now() - new Date(buyerConfirmedAt).getTime()) < 24 * 60 * 60 * 1000
+                  : myOrderStatus === 'DELIVERED';
+                const myCanCancel = ['ORDERED', 'ADMIN_CONFIRMED'].includes(myOrderStatus);
+                const myCanReceive = ['IN_DELIVERY', 'PICKUP_READY'].includes(myOrderStatus);
+                const myCanConfirm = myOrderStatus === 'DELIVERED';
+                const myCanReturn = myOrderStatus === 'DELIVERED' && withinReturnWindow;
+                const myStatusLabel = { ORDERED: '주문완료', ADMIN_CONFIRMED: '판매자확인', IN_DELIVERY: '배송중', PICKUP_READY: '방문준비', DELIVERED: '수령완료', COMPLETED: '구매확정', CANCELLED: '주문취소', RETURN_REQUESTED: '반품요청중', RETURNED: '반품완료' }[myOrderStatus] || myOrderStatus;
+                return (
+                  <div key={row.id || row.requestId} style={{ padding: '8px 10px', border: '1px solid #DDE3EA', borderRadius: 8, background: '#F8FAFC' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: 13 }}>{row.itemName || '(상품명 없음)'}</div>
+                        <div style={{ fontSize: 12, opacity: 0.75, marginTop: 2 }}>
+                          {myReceiveMethod === 'pickup' ? '방문수령' : '택배'} {row.paymentAmount ? `· ${Number(row.paymentAmount).toLocaleString('ko-KR')}P` : ''}
+                        </div>
+                        {myReceiveMethod === 'delivery' && myMsgMeta.address && (
+                          <div style={{ fontSize: 11, marginTop: 2, color: '#0f4c75', background: '#e8f4fd', padding: '2px 6px', borderRadius: 4, display: 'inline-block' }}>배송지: {myMsgMeta.address}</div>
+                        )}
+                        {myReceiveMethod === 'pickup' && myMsgMeta.visit && (
+                          <div style={{ fontSize: 11, marginTop: 2, color: '#166534', background: '#dcfce7', padding: '2px 6px', borderRadius: 4, display: 'inline-block' }}>방문: {myMsgMeta.visit}</div>
+                        )}
+                        <div style={{ fontSize: 12, fontWeight: 600, marginTop: 4, color: ['CANCELLED','RETURNED'].includes(myOrderStatus) ? '#dc2626' : ['COMPLETED'].includes(myOrderStatus) ? '#166534' : '#0369a1' }}>{myStatusLabel}</div>
+                      </div>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: 5, alignItems: 'flex-end', flexShrink: 0 }}>
+                        {myCanCancel && (
+                          <button type="button" onClick={() => handleDistributionManagedStatus(row, { orderStatus: 'CANCELLED', cancelReason: '구매자 취소' }, '주문이 취소되었습니다.')} style={{ padding: '4px 8px', border: 'none', borderRadius: 6, background: '#FEE2E2', color: '#dc2626', fontSize: 12 }}>주문취소</button>
+                        )}
+                        {myCanReceive && (
+                          <button type="button" onClick={() => handleDistributionManagedStatus(row, { orderStatus: 'DELIVERED', buyerConfirmed: true }, '수령 확인되었습니다.')} style={{ padding: '4px 8px', border: 'none', borderRadius: 6, background: '#DBEAFE', color: '#1D4ED8', fontSize: 12, fontWeight: 700 }}>수령확인</button>
+                        )}
+                        {myCanConfirm && (
+                          <button type="button" onClick={() => handleDistributionManagedStatus(row, { orderStatus: 'COMPLETED' }, '구매확정되었습니다.')} style={{ padding: '4px 8px', border: 'none', borderRadius: 6, background: '#DCFCE7', color: '#166534', fontSize: 12, fontWeight: 700 }}>구매확정</button>
+                        )}
+                        {myCanReturn && (
+                          <button type="button" onClick={() => handleDistributionManagedStatus(row, { orderStatus: 'RETURN_REQUESTED', returnReason: '구매자 반품 요청' }, '반품 요청이 접수되었습니다.')} style={{ padding: '4px 8px', border: 'none', borderRadius: 6, background: '#FEF3C7', color: '#92400E', fontSize: 12 }}>반품요청</button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+
+        <div className="su-card">
+          <div style={{ fontSize: 13, fontWeight: 800, marginBottom: 8 }}>�📦 내 등록 상품</div>
+          {distributionLoading ? (
+            <div style={{ opacity: 0.6 }}>로딩 중...</div>
+          ) : distributionItems.length === 0 ? (
+            <div style={{ opacity: 0.7 }}>등록된 유통 상품이 없습니다.</div>
+          ) : (
+            <div style={{ display: 'grid', gap: 8 }}>
+              {distributionItems.slice(0, 6).map((item) => (
+                <div key={item.id} style={{ padding: '8px 10px', borderRadius: 8, border: '1px solid #DDE3EA', background: '#F8FAFC' }}>
+                  <div style={{ display: 'flex', gap: 10, alignItems: 'center', minWidth: 0 }}>
+                    {item.imageUrl ? (
+                      <img src={item.imageUrl} alt={item.title} style={{ width: 46, height: 46, borderRadius: 8, objectFit: 'cover', flexShrink: 0 }} />
+                    ) : (
+                      <div style={{ width: 46, height: 46, borderRadius: 8, background: '#EEF2F7', color: '#94a3b8', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, flexShrink: 0 }}>NO IMG</div>
+                    )}
+                    <div style={{ minWidth: 0 }}>
+                      <div style={{ fontWeight: 700, fontSize: 13, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{item.title}</div>
+                      <div style={{ marginTop: 2, fontSize: 12, opacity: 0.75 }}>{formatNumber(item.price || 0)}P · 재고 {item.quantity ?? 0}</div>
+                      <div style={{ marginTop: 2, fontSize: 11, color: '#475569' }}>{DISTRIBUTION_STATUS_LABELS[String(item.status || '').toLowerCase()] || String(item.status || '-')}</div>
+                    </div>
+                  </div>
+                  {isDistributionManager && (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 6, marginTop: 8 }}>
+                      <button type="button" onClick={() => openEditDistributionForm(item)} style={{ padding: '5px 0', border: 'none', borderRadius: 6, background: '#E8F4FD', color: '#0C5460', fontSize: 12, fontWeight: 700 }}>수정</button>
+                      <button type="button" onClick={() => handleDistributionStatus(item, 'available')} style={{ padding: '5px 0', border: '1px solid #16a34a', borderRadius: 6, background: String(item.status || '').toLowerCase() === 'available' ? '#dcfce7' : 'transparent', color: '#16a34a', fontSize: 12 }}>판매중</button>
+                      <button type="button" onClick={() => handleDistributionStatus(item, 'soldout')} style={{ padding: '5px 0', border: '1px solid #d97706', borderRadius: 6, background: String(item.status || '').toLowerCase() === 'soldout' ? '#FEF3C7' : 'transparent', color: '#d97706', fontSize: 12 }}>품절</button>
+                      <button type="button" onClick={() => handleDistributionStatus(item, 'hidden')} style={{ padding: '5px 0', border: '1px solid #64748b', borderRadius: 6, background: String(item.status || '').toLowerCase() === 'hidden' ? '#E2E8F0' : 'transparent', color: '#475569', fontSize: 12 }}>숨김</button>
+                      <button type="button" onClick={() => handleDistributionDelete(item.id)} style={{ padding: '5px 0', border: 'none', borderRadius: 6, background: '#FEF2F2', color: '#dc2626', fontSize: 12, fontWeight: 700 }}>삭제</button>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        <div className="su-card" style={{ marginTop: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+            <div style={{ fontSize: 13, fontWeight: 800 }}>💰 판매 포인트지갑</div>
+            <button
+              type="button"
+              onClick={() => setDistWithdrawOpen((v) => !v)}
+              disabled={!distWallet || distWallet.available <= 0}
+              style={{ fontSize: 12, fontWeight: 700, padding: '4px 12px', borderRadius: 6, border: 'none', background: distWallet && distWallet.available > 0 ? '#0f766e' : '#94A3B8', color: '#fff', cursor: distWallet && distWallet.available > 0 ? 'pointer' : 'not-allowed' }}
+            >출금요청</button>
+          </div>
+          {distWalletLoading ? (
+            <div style={{ opacity: 0.6, fontSize: 13 }}>잔액 조회 중...</div>
+          ) : (
+            <>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, marginBottom: 10 }}>
+                <div style={{ background: '#F0FDF4', borderRadius: 8, padding: '8px 10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, color: '#166534', fontWeight: 600 }}>누적 판매대금</div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: '#166534', marginTop: 2 }}>{(distWallet?.totalEarned ?? 0).toLocaleString('ko-KR')}P</div>
+                </div>
+                <div style={{ background: '#FEF3C7', borderRadius: 8, padding: '8px 10px', textAlign: 'center' }}>
+                  <div style={{ fontSize: 11, color: '#92400E', fontWeight: 600 }}>출금신청액</div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: '#92400E', marginTop: 2 }}>{(distWallet?.totalWithdrawn ?? 0).toLocaleString('ko-KR')}P</div>
+                </div>
+                <div style={{ background: '#EFF6FF', borderRadius: 8, padding: '8px 10px', textAlign: 'center', gridColumn: '1 / -1' }}>
+                  <div style={{ fontSize: 11, color: '#1D4ED8', fontWeight: 600 }}>출금가능</div>
+                  <div style={{ fontSize: 16, fontWeight: 800, color: '#1D4ED8', marginTop: 2 }}>{(distWallet?.available ?? 0).toLocaleString('ko-KR')}P</div>
+                </div>
+              </div>
+              {distWithdrawOpen && (
+                <form onSubmit={handleDistWithdraw} style={{ background: '#F8FAFC', border: '1px solid #DDE3EA', borderRadius: 8, padding: '12px 14px', marginBottom: 10, display: 'grid', gap: 8 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: '#0f766e' }}>출금 요청 - 가용: {(distWallet?.available ?? 0).toLocaleString('ko-KR')}P</div>
+                  <input className="su-input" type="number" min="1" max={distWallet?.available ?? 0} placeholder="출금 금액(P)" value={distWithdrawForm.amount} onChange={(e) => setDistWithdrawForm((f) => ({ ...f, amount: e.target.value }))} style={{ padding: '7px 10px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: 13, color: '#1E293B', background: '#fff' }} required />
+                  <input className="su-input" type="text" placeholder="은행명" value={distWithdrawForm.bankName} onChange={(e) => setDistWithdrawForm((f) => ({ ...f, bankName: e.target.value }))} style={{ padding: '7px 10px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: 13, color: '#1E293B', background: '#fff' }} required />
+                  <input className="su-input" type="text" placeholder="계좌번호" value={distWithdrawForm.accountNumber} onChange={(e) => setDistWithdrawForm((f) => ({ ...f, accountNumber: e.target.value }))} style={{ padding: '7px 10px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: 13, color: '#1E293B', background: '#fff' }} required />
+                  <input className="su-input" type="text" placeholder="예금주명" value={distWithdrawForm.depositorName} onChange={(e) => setDistWithdrawForm((f) => ({ ...f, depositorName: e.target.value }))} style={{ padding: '7px 10px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: 13, color: '#1E293B', background: '#fff' }} required />
+                  <input className="su-input" type="text" placeholder="메모 (선택)" value={distWithdrawForm.memo} onChange={(e) => setDistWithdrawForm((f) => ({ ...f, memo: e.target.value }))} style={{ padding: '7px 10px', borderRadius: 6, border: '1px solid #CBD5E1', fontSize: 13, color: '#1E293B', background: '#fff' }} />
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button type="submit" disabled={distWithdrawSubmitting} style={{ flex: 1, padding: '8px', borderRadius: 6, border: 'none', background: '#0f766e', color: '#fff', fontWeight: 700, fontSize: 13, cursor: 'pointer' }}>{distWithdrawSubmitting ? '처리 중...' : '출금 요청'}</button>
+                    <button type="button" onClick={() => setDistWithdrawOpen(false)} style={{ padding: '8px 14px', borderRadius: 6, border: '1px solid #CBD5E1', background: '#fff', fontSize: 13, cursor: 'pointer' }}>취소</button>
+                  </div>
+                </form>
+              )}
+              {distWallet?.withdrawals?.length > 0 && (
+                <div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                    <div style={{ fontSize: 12, fontWeight: 700, color: '#475569' }}>출금 이력</div>
+                    {distWallet.withdrawals.length > 5 && (
+                      <button type="button" onClick={() => setShowAllWithdrawals((v) => !v)} style={{ fontSize: 11, color: '#0369a1', background: '#e0f2fe', border: '1px solid #bae6fd', borderRadius: 20, cursor: 'pointer', fontWeight: 700, padding: '3px 10px', display: 'inline-flex', alignItems: 'center', gap: 3 }}>{showAllWithdrawals ? '▲ 접기' : `▼ 전체보기 (${distWallet.withdrawals.length})`}</button>
+                    )}
+                  </div>
+                  <div style={{ display: 'grid', gap: 6 }}>
+                    {(showAllWithdrawals ? distWallet.withdrawals : distWallet.withdrawals.slice(0, 5)).map((w) => {
+                      const wStatus = String(w.status || 'PENDING').toUpperCase();
+                      const wStatusLabel = { PENDING: '대기중', APPROVED: '승인됨', PAID: '지급완료', REJECTED: '거절됨' }[wStatus] || wStatus;
+                      const wStatusColor = { PENDING: '#92400E', APPROVED: '#1D4ED8', PAID: '#166534', REJECTED: '#dc2626' }[wStatus] || '#475569';
+                      return (
+                        <div key={w.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 10px', background: '#F8FAFC', borderRadius: 6, border: '1px solid #E2E8F0' }}>
+                          <div>
+                            <div style={{ fontSize: 13, fontWeight: 700 }}>{Number(w.amount || 0).toLocaleString('ko-KR')}P</div>
+                            <div style={{ fontSize: 11, opacity: 0.7 }}>{w.bank_name} {w.account_number} ({w.depositor_name})</div>
+                            <div style={{ fontSize: 11, opacity: 0.6 }}>{w.requested_at ? new Date(w.requested_at).toLocaleDateString('ko-KR') : ''}</div>
+                            {w.reject_reason && <div style={{ fontSize: 11, color: '#dc2626' }}>사유: {w.reject_reason}</div>}
+                          </div>
+                          <div style={{ fontSize: 12, fontWeight: 700, color: wStatusColor }}>{wStatusLabel}</div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+        </div>
+
+        <div className="su-card" style={{ marginTop: 10 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <div style={{ fontSize: 13, fontWeight: 800 }}>📬 내 유통 판매 관리</div>
+            {distributionManagedOrders.length > 5 && (
+              <button type="button" onClick={() => setShowAllSales((v) => !v)} style={{ fontSize: 11, color: '#0369a1', background: '#e0f2fe', border: '1px solid #bae6fd', borderRadius: 20, cursor: 'pointer', fontWeight: 700, padding: '3px 10px', display: 'inline-flex', alignItems: 'center', gap: 3 }}>{showAllSales ? '▲ 접기' : `▼ 전체보기 (${distributionManagedOrders.length})`}</button>
+            )}
+          </div>
+          {distributionLoading ? (
+            <div style={{ opacity: 0.6 }}>로딩 중...</div>
+          ) : distributionManagedOrders.length === 0 ? (
+            <div style={{ opacity: 0.7 }}>처리할 주문이 없습니다.</div>
+          ) : (
+            <div style={{ display: 'grid', gap: 8 }}>
+              {(showAllSales ? distributionManagedOrders : distributionManagedOrders.slice(0, 5)).map((row) => {
+                const orderStatus = String(row?.orderStatus || row?.order_status || row?.status || 'ORDERED').toUpperCase();
+                const receiveMethod = String(row?.receiveMethod || row?.receive_method || 'delivery').toLowerCase();
+                const sellerMsgMeta = parseMyOrderMessageMeta(row?.message);
+                return (
+                  <div key={row.id || row.requestId} style={{ padding: '8px 10px', border: '1px solid #DDE3EA', borderRadius: 8, background: '#F8FAFC' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 8 }}>
+                      <div>
+                        <div style={{ fontWeight: 700, fontSize: 13 }}>{row.itemName || '(상품 미지정)'}</div>
+                        {(() => {
+                          const rowRegionName = row.regionName || (() => {
+                            const rid = String(row.regionId || '');
+                            if (!rid) return '';
+                            const found = memberRegions.find((rg) => String(rg.id || rg.regionId || rg.region_id || '') === rid || String(rg.regionId || rg.region_id || '') === rid);
+                            return String(found?.name || found?.regionName || '').trim();
+                          })();
+                          return (
+                            <div style={{ marginTop: 2, fontSize: 12, opacity: 0.75 }}>
+                              {row.requesterName || '구매자'}{rowRegionName ? ` · ${rowRegionName}` : ''} · {receiveMethod === 'pickup' ? '방문' : '택배'}{row.paymentAmount ? ` · ${Number(row.paymentAmount).toLocaleString('ko-KR')}P` : ''}
+                            </div>
+                          );
+                        })()}
+                        {row.requesterContact && (
+                          <div style={{ marginTop: 2, fontSize: 11, color: '#334155' }}>📞 {row.requesterContact}</div>
+                        )}
+                        {receiveMethod === 'delivery' && sellerMsgMeta.address && (
+                          <div style={{ marginTop: 2, fontSize: 11, color: '#0f4c75', background: '#e8f4fd', padding: '2px 6px', borderRadius: 4, display: 'inline-block' }}>배송지: {sellerMsgMeta.address}</div>
+                        )}
+                        {receiveMethod === 'pickup' && sellerMsgMeta.visit && (
+                          <div style={{ marginTop: 2, fontSize: 11, color: '#166534', background: '#dcfce7', padding: '2px 6px', borderRadius: 4, display: 'inline-block' }}>방문: {sellerMsgMeta.visit}</div>
+                        )}
+                        <div style={{ marginTop: 3, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                          <span style={{
+                            fontSize: 11, fontWeight: 700, padding: '2px 7px', borderRadius: 10,
+                            background: orderStatus === 'COMPLETED' ? '#166534' : orderStatus === 'ORDERED' ? '#e0f2fe' : orderStatus === 'ADMIN_CONFIRMED' ? '#dbeafe' : orderStatus === 'IN_DELIVERY' ? '#dbeafe' : orderStatus === 'PICKUP_READY' ? '#ecfccb' : orderStatus === 'DELIVERED' ? '#dcfce7' : orderStatus === 'CANCELLED' ? '#fee2e2' : orderStatus === 'RETURN_REQUESTED' ? '#fef3c7' : orderStatus === 'RETURNED' ? '#fef3c7' : '#f1f5f9',
+                            color: orderStatus === 'COMPLETED' ? '#fff' : orderStatus === 'ORDERED' ? '#075985' : orderStatus === 'ADMIN_CONFIRMED' ? '#1d4ed8' : orderStatus === 'IN_DELIVERY' ? '#1d4ed8' : orderStatus === 'PICKUP_READY' ? '#4d7c0f' : orderStatus === 'DELIVERED' ? '#166534' : orderStatus === 'CANCELLED' ? '#dc2626' : orderStatus === 'RETURN_REQUESTED' ? '#92400e' : orderStatus === 'RETURNED' ? '#92400e' : '#475569',
+                          }}>{({ ORDERED: '주문완료', ADMIN_CONFIRMED: '주문확인됨', IN_DELIVERY: '배송중', PICKUP_READY: '방문준비', DELIVERED: '수령완료', COMPLETED: '판매완료', CANCELLED: '주문취소', RETURN_REQUESTED: '반품요청', RETURNED: '반품완료' })[orderStatus] || orderStatus}</span>
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'flex-end' }}>
+                        {orderStatus === 'ORDERED' && (
+                          <button type="button" onClick={() => handleDistributionManagedStatus(row, { orderStatus: 'ADMIN_CONFIRMED' }, '주문 확인 처리했습니다.')} style={{ padding: '4px 8px', border: 'none', borderRadius: 6, background: '#E0F2FE', color: '#075985', fontSize: 12, fontWeight: 700 }}>주문확인</button>
+                        )}
+                        {orderStatus === 'ADMIN_CONFIRMED' && receiveMethod === 'delivery' && (
+                          <button type="button" onClick={() => handleDistributionManagedStatus(row, { orderStatus: 'IN_DELIVERY' }, '배송중 상태로 변경했습니다.')} style={{ padding: '4px 8px', border: 'none', borderRadius: 6, background: '#DBEAFE', color: '#1D4ED8', fontSize: 12, fontWeight: 700 }}>배송처리</button>
+                        )}
+                        {orderStatus === 'ADMIN_CONFIRMED' && receiveMethod === 'pickup' && (
+                          <button type="button" onClick={() => handleDistributionManagedStatus(row, { orderStatus: 'PICKUP_READY' }, '방문 준비 상태로 변경했습니다.')} style={{ padding: '4px 8px', border: 'none', borderRadius: 6, background: '#ECFCCB', color: '#4D7C0F', fontSize: 12, fontWeight: 700 }}>방문준비</button>
+                        )}
+                        {orderStatus === 'RETURN_REQUESTED' && (
+                          <button type="button" onClick={() => handleDistributionManagedStatus(row, { orderStatus: 'RETURNED', returnReason: '판매자 승인 반품' }, '반품 승인 처리되었습니다.')} style={{ padding: '4px 8px', border: 'none', borderRadius: 6, background: '#FEF3C7', color: '#92400E', fontSize: 12, fontWeight: 700 }}>반품승인</button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </section>
+      )}
+
       {/* ────────── ⑤ 친구 / 커뮤니케이션 ────────── */}
       {myTab === 'activity' && (
       <section className="su-panel">
@@ -5026,6 +6290,7 @@ export default function My() {
   {renderScheduleModal()}
   {renderCardModal()}
   {renderOfferModal()}
+  {renderDistributionFormModal()}
   {renderAllRequestsModal()}
   {renderAllPurchasesModal()}
 
@@ -5082,6 +6347,19 @@ export default function My() {
     type={toast.type}
     onClose={() => setToast({ open: false, message: "", type: "success" })} 
   />
+
+  {/* Custom Alert Modal */}
+  {customAlert.open && (
+    <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }} onClick={() => setCustomAlert({ open: false, message: '' })}>
+      <div style={{ width: 'min(90%, 380px)', borderRadius: 16, background: '#fff', boxShadow: '0 8px 32px rgba(0,0,0,0.18)', overflow: 'hidden', animation: 'myAlertSlideUp 0.25s ease-out' }} onClick={(e) => e.stopPropagation()}>
+        <div style={{ padding: '20px 20px 14px', fontSize: 15, lineHeight: 1.7, color: '#1e293b', fontWeight: 600 }}>{customAlert.message}</div>
+        <div style={{ borderTop: '1px solid #e2e8f0' }}>
+          <button type="button" onClick={() => setCustomAlert({ open: false, message: '' })} style={{ width: '100%', padding: 14, border: 'none', background: '#0e7490', color: '#fff', fontSize: 15, fontWeight: 700, cursor: 'pointer', borderRadius: '0 0 16px 16px' }}>확인</button>
+        </div>
+      </div>
+    </div>
+  )}
+  <style>{`@keyframes myAlertSlideUp { from { opacity: 0; transform: translateY(24px); } to { opacity: 1; transform: translateY(0); } }`}</style>
   </div>
   );
 }

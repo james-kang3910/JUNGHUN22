@@ -58,6 +58,7 @@ import PostDetail from "./pages/PostDetail";
 import Notices from "./pages/Notices";
 import Missions from "./pages/Missions";
 import Support from "./pages/Support";
+import Distribution from "./pages/Distribution";
 import Card from "./pages/Card";
 
 // ⚡ 코드 스플리팅: 관리자 페이지는 lazy loading
@@ -74,6 +75,7 @@ const AdminAuditions = lazy(() => import("./pages/admin/AdminAuditions"));
 const AdminPoints = lazy(() => import("./pages/admin/AdminPoints"));
 const AdminLiveBroadcast = lazy(() => import("./pages/admin/AdminLiveBroadcast"));
 const AdminSupplies = lazy(() => import("./pages/admin/AdminSupplies"));
+const AdminDistribution = lazy(() => import("./pages/admin/AdminDistribution"));
 const AdminSupplyManagers = lazy(() => import("./pages/admin/AdminSupplyManagers"));
 const AdminSupplyTools = lazy(() => import("./pages/admin/AdminSupplyTools"));
 const AdminBackupTools = lazy(() => import("./pages/admin/AdminBackupTools"));
@@ -1537,7 +1539,7 @@ function AppBottomNav({ isLoggedIn, authReady, onLogout }) {
   const tabs = [
     {
       key: "home",
-      label: "홈",
+      label: "메인홈",
       active: currentPath === "/home" || currentPath === "/",
       onClick: () => navigate("/home"),
     },
@@ -6175,6 +6177,48 @@ export default function App() {
     };
   }, []);
 
+  // 푸시 알림 구독 (로그인 시)
+  useEffect(() => {
+    if (!authState.authReady || !authState.isLoggedIn) return;
+    const session = getSession();
+    const currentUser = getCurrentUser();
+    const memberId = String(session?.memberId || currentUser?.memberId || currentUser?.id || '').trim();
+    if (!memberId) return;
+    if (!('serviceWorker' in navigator) || !('PushManager' in window)) return;
+
+    (async () => {
+      try {
+        const permission = await Notification.requestPermission();
+        if (permission !== 'granted') return;
+
+        // SW가 아직 등록 안 되어있으면 직접 등록
+        let reg = await navigator.serviceWorker.getRegistration();
+        if (!reg) {
+          reg = await navigator.serviceWorker.register('/sw.js');
+          // wait for the SW to be ready
+          await navigator.serviceWorker.ready;
+        }
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) {
+          const res = await storageAdapter.getVapidKey();
+          if (!res?.publicKey) return;
+          const key = res.publicKey;
+          sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: key,
+          });
+        }
+        const subJson = sub.toJSON();
+        await storageAdapter.subscribePush({
+          endpoint: subJson.endpoint,
+          keys: subJson.keys,
+        }, memberId);
+      } catch (err) {
+        if (import.meta.env.DEV) console.error('[Push] subscribe error:', err);
+      }
+    })();
+  }, [authState.authReady, authState.isLoggedIn]);
+
   return (
     <div className="su-appShell su-app">
   <VoucherFetchRecorder />
@@ -6239,6 +6283,8 @@ export default function App() {
           <Route path="/notices/:id" element={<Notices />} />
           <Route path="/missions" element={<Missions />} />
           <Route path="/support" element={<Support />} />
+          <Route path="/distribution" element={<Distribution />} />
+          <Route path="/distribution/:id" element={<Distribution />} />
           <Route path="/card" element={<Card />} />
 
           <Route path="/regional-admin" element={<RegionalAdminConsole />} />
@@ -6258,6 +6304,7 @@ export default function App() {
             <Route path="points" element={<AdminPoints />} />
             <Route path="live-broadcast" element={<AdminLiveBroadcast />} />
             <Route path="supplies" element={<AdminSupplies />} />
+            <Route path="distribution" element={<AdminDistribution />} />
             <Route path="supply-managers" element={<AdminSupplyManagers />} />
             <Route path="supply-tools" element={<AdminSupplyTools />} />
             <Route path="backup-tools" element={<AdminBackupTools />} />

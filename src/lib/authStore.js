@@ -318,13 +318,14 @@ export function isLoggedIn() {
 export function getSession() {
   if (!SESSION_STATE) return null;
   
-  // AUTH_STATE에서 supplyManager 필드 추가하여 반환
+  // AUTH_STATE에서 권한 필드를 포함하여 반환
   const member = AUTH_STATE || {};
   return { 
     ...SESSION_STATE, 
     status: normStatus(SESSION_STATE.status),
     regionId: SESSION_STATE.regionId ?? member.regionId ?? null,
     supplyManager: !!member.supplyManager,
+    distributionManager: !!member.distributionManager,
     role: member.role
   };
 }
@@ -453,6 +454,7 @@ export async function signUp({ name, phone, password, nickname, region, regionId
       phone: serverMember.phone,
       role: serverMember.role || "user",
       supplyManager: !!serverMember.supplyManager,
+      distributionManager: !!(serverMember.distributionManager ?? serverMember.distribution_manager),
       status: normStatus(serverMember.status || "ACTIVE"),
       regionId: serverMember.regionId,
       createdAt: serverMember.createdAt,
@@ -516,6 +518,7 @@ export async function signIn({ email, userId, phone, identifier, password }) {
       phone: serverMember.phone,
       role: serverMember.role || "user",
       supplyManager: !!serverMember.supplyManager,
+      distributionManager: !!(serverMember.distributionManager ?? serverMember.distribution_manager),
       status: normStatus(serverMember.status || "ACTIVE"),
       regionId: serverMember.regionId,
       createdAt: serverMember.createdAt,
@@ -596,6 +599,7 @@ export async function hydrateAuthFromServer() {
         phone: m.phone,
         role: m.role || "user",
         supplyManager: !!m.supplyManager,
+        distributionManager: !!(m.distributionManager ?? m.distribution_manager),
         status: normStatus(m.status || "ACTIVE"),
         regionId: m.regionId,
         createdAt: m.createdAt,

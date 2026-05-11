@@ -183,7 +183,7 @@ export default function VideoEmbed({ url, mode = "thumbnail", autoplay = false, 
           className="su-mediaEl"
           controls={!isThumbnail}
           playsInline
-          muted={isThumbnail || autoplay}
+          muted={isThumbnail}
           autoPlay={autoplay}
           loop={autoplay}
           preload="auto"

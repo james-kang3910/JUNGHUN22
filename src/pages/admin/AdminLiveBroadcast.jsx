@@ -81,6 +81,13 @@ export default function AdminLiveBroadcast() {
     }
     setIsStarting(true);
     try {
+      // ★ HTTPS 체크 (getUserMedia는 HTTPS 또는 localhost에서만 동작)
+      const isSecure = location.protocol === 'https:' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+      if (!isSecure) {
+        setError('카메라 사용은 HTTPS 환경에서만 가능합니다. 현재 주소: ' + location.origin);
+        return;
+      }
+
       // ★ getUserMedia 지원 여부 체크
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         setError("이 브라우저는 카메라/마이크를 지원하지 않습니다. 최신 Chrome/Firefox/Safari를 사용하세요.");
@@ -95,10 +102,9 @@ export default function AdminLiveBroadcast() {
       await storageAdapter.startLiveBroadcast(broadcastId, title, createdBy);
       
       // 카메라/마이크 시작
-      // iOS/모바일에서 검은 화면 이슈가 있어 facingMode 힌트를 제공
       console.log('[AdminLiveBroadcast] Requesting media stream');
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: { ideal: 'environment' } },
+        video: { facingMode: 'user' },
         audio: true,
       });
       console.log('[AdminLiveBroadcast] Media stream acquired successfully');
@@ -111,9 +117,6 @@ export default function AdminLiveBroadcast() {
         audioTracksCount: audioTracks.length,
         videoTrack: videoTracks[0]?.label,
         audioTrack: audioTracks[0]?.label,
-        videoReadyState: videoTracks[0]?.readyState,
-        videoEnabled: videoTracks[0]?.enabled,
-        videoMuted: videoTracks[0]?.muted,
       });
       
       if (videoTracks.length === 0) {
@@ -122,22 +125,18 @@ export default function AdminLiveBroadcast() {
       
       if (videoRef.current) {
         try {
-          // iOS Safari: playsInline 속성 강제
           videoRef.current.setAttribute('playsinline', '');
           videoRef.current.setAttribute('webkit-playsinline', '');
         } catch (e) {}
         videoRef.current.srcObject = stream;
         
-        // ★ loadedmetadata 이벤트에서 명시적 play 호출
-        videoRef.current.onloadedmetadata = () => {
-          console.log('[AdminLiveBroadcast] ▶️ Video metadata loaded, starting playback...');
-          videoRef.current.play().then(() => {
-            console.log('[AdminLiveBroadcast] ✅ Video playback started successfully');
-          }).catch(err => {
-            console.error('[AdminLiveBroadcast] ❌ Video playback failed:', err);
-            setError('비디오 재생 실패: ' + err.message);
-          });
-        };
+        // ★ 즉시 play() 호출 (onloadedmetadata 대기하지 않음)
+        try {
+          await videoRef.current.play();
+          console.log('[AdminLiveBroadcast] ✅ Video playback started');
+        } catch (err) {
+          console.error('[AdminLiveBroadcast] ❌ Video playback failed:', err);
+        }
         
         try { window.liveStream = stream; } catch (e) {}
         try { localStorage.setItem('su_live_broadcast_on', '1'); } catch (e) {}
@@ -231,13 +230,15 @@ export default function AdminLiveBroadcast() {
           >
             방송 종료
           </button>
-          <video
-            ref={videoRef}
-            autoPlay
-            playsInline
-            muted
-            style={{ width: "100%", borderRadius: 12, background: "#000", minHeight: 220 }}
-          />
+          <div style={{ width: "100%", aspectRatio: "16/9", borderRadius: 12, overflow: "hidden", background: "#000" }}>
+            <video
+              ref={videoRef}
+              autoPlay
+              playsInline
+              muted
+              style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }}
+            />
+          </div>
           {liveStatus?.broadcast && (
             <div style={{ padding: 12, background: "rgba(34, 197, 94, 0.1)", borderRadius: 8, fontSize: 13 }}>
               <div>방송 제목: {liveStatus.broadcast.title}</div>

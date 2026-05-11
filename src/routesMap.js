@@ -6,12 +6,13 @@ export const ROUTES = {
   region: "/region",
   missions: "/missions",
   support: "/support",
+  distribution: "/distribution",
   my: "/my",
   auth: "/auth",
 };
 
 export const NAV_ITEMS = [
-  { key: "home",      path: ROUTES.home,      label: "홈" },
+  { key: "home",      path: ROUTES.home,      label: "메인홈" },
   { key: "auth",      path: ROUTES.auth,      label: "로그인/회원가입" },
   { key: "community", path: ROUTES.community, label: "커뮤니티" },
   { key: "shops",     path: ROUTES.shops,     label: "상권" },

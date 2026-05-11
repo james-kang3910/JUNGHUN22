@@ -128,8 +128,9 @@ export async function updateMemberById(memberId, updates) {
     throw new Error('updateMemberById: updates payload is empty or invalid');
   }
   const res = await fetch(`${API_BASE}/api/members/${encodeURIComponent(memberId)}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', ..._adminAuthHeader() },
+    credentials: 'include',
     body: JSON.stringify(updates),
   });
   return checkStatus(res);
@@ -1410,6 +1411,9 @@ export async function fetchSupplies(params = {}) {
   const queryParams = new URLSearchParams();
   if (params.region) queryParams.append('region', params.region);
   if (params.status) queryParams.append('status', params.status);
+  if (params.createdBy) queryParams.append('createdBy', params.createdBy);
+  if (params.type) queryParams.append('type', params.type);
+  if (params.districtId) queryParams.append('districtId', params.districtId);
   
   const url = queryParams.toString() 
     ? `${API_BASE}/api/supplies?${queryParams}`
@@ -1466,7 +1470,9 @@ export async function getPointHistory(memberId, filters = {}) {
  * 관리자: 포인트 지급/차감
  */
 export async function grantPoints(memberId, amount, type = 'ADMIN', description = '', referenceId = null, referenceType = null) {
-  const token = window.__SU_SESSION__?.token || '';
+  // 관리자 세션 토큰 우선 (sessionStorage), 없으면 일반 세션 토큰 fallback
+  const adminToken = (typeof sessionStorage !== 'undefined') ? sessionStorage.getItem('su_admin_token') : null;
+  const token = adminToken || window.__SU_SESSION__?.token || '';
   return fetchWithRetry(`${API_BASE}/api/points/admin/grant`, {
     method: 'POST',
     headers: {
@@ -1500,6 +1506,22 @@ export async function payWithPoints(storeId, amount, memberId, clientNonce = nul
     headers: { 
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${memberId}`
+    },
+    body: JSON.stringify({ storeId, amount, clientNonce }),
+  });
+}
+
+/**
+ * 유저: 세션 기반 포인트 결제
+ * - requireAuth 라우트에 맞춰 현재 로그인 세션 토큰(Bearer)을 사용한다.
+ */
+export async function payWithSessionPoints(storeId, amount, clientNonce = null) {
+  const token = window.__SU_SESSION__?.token || '';
+  return fetchWithRetry(`${API_BASE}/api/points/pay`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
     },
     body: JSON.stringify({ storeId, amount, clientNonce }),
   });
@@ -1746,6 +1768,11 @@ export async function createSupplyRequest(request) {
     message: payload.message ?? null,
     requesterName: payload.requesterName ?? null,
     requesterContact: payload.requesterContact ?? null,
+    requestType: payload.requestType ?? null,
+    orderStatus: payload.orderStatus ?? null,
+    receiveMethod: payload.receiveMethod ?? null,
+    paymentReferenceId: payload.paymentReferenceId ?? null,
+    paymentAmount: payload.paymentAmount ?? null,
   };
 
   if (!Number.isFinite(normalized.quantity) || normalized.quantity <= 0) {
@@ -1766,10 +1793,11 @@ export async function createSupplyRequest(request) {
  * 보급지원 신청 목록 조회
  */
 export async function getSupplyRequests(params = {}) {
-  const { managerId, requesterId } = params;
+  const { managerId, requesterId, requestType } = params;
   const queryParams = [];
   if (managerId) queryParams.push(`managerId=${encodeURIComponent(managerId)}`);
   if (requesterId) queryParams.push(`requesterId=${encodeURIComponent(requesterId)}`);
+  if (requestType) queryParams.push(`requestType=${encodeURIComponent(requestType)}`);
   const query = queryParams.length > 0 ? `?${queryParams.join('&')}` : '';
   
   // ✅ apiClient 사용: credentials 자동 포함
@@ -1792,6 +1820,45 @@ export async function updateSupplyRequestStatus(requestId, status) {
     return result;
   } catch (error) {
     console.error('[updateSupplyRequestStatus] Error:', error.message);
+    throw error;
+  }
+}
+
+/**
+ * 보급/유통 신청 상세 상태 변경
+ */
+export async function updateSupplyRequest(requestId, updates = {}) {
+  if (!requestId) throw new Error('updateSupplyRequest: requestId is required');
+  if (!updates || typeof updates !== 'object') throw new Error('updateSupplyRequest: updates must be an object');
+  try {
+    const result = await apiPatch(`/api/supply-requests/${encodeURIComponent(requestId)}`, updates);
+    return result;
+  } catch (error) {
+    console.error('[updateSupplyRequest] Error:', error.message);
+    throw error;
+  }
+}
+
+//------------------------------------------------------------------------------
+// Posts API
+// ============================================================
+// Distribution Wallet API
+// ============================================================
+
+export async function getDistWallet() {
+  try {
+    return await apiGet('/api/dist/wallet');
+  } catch (error) {
+    console.error('[getDistWallet] Error:', error.message);
+    throw error;
+  }
+}
+
+export async function requestDistWithdraw({ amount, bankName, accountNumber, depositorName, memo }) {
+  try {
+    return await apiPost('/api/dist/wallet/withdraw', { amount, bankName, accountNumber, depositorName, memo });
+  } catch (error) {
+    console.error('[requestDistWithdraw] Error:', error.message);
     throw error;
   }
 }
@@ -3077,5 +3144,52 @@ export async function deleteRegionFestivalComment(regionId, festivalId, commentI
   return fetchWithRetry(`${API_BASE}/api/regions/${encodeURIComponent(regionId)}/festivals/${encodeURIComponent(festivalId)}/comments/${encodeURIComponent(commentId)}`, {
     method: 'DELETE',
     headers: { ..._regionAuthHeaders() },
+  });
+}
+
+// ═══════════════════════════════════════
+// Reservation API
+// ═══════════════════════════════════════
+
+export async function createReservation(shopId, data, memberId) {
+  return fetchWithRetry(`${API_BASE}/api/shops/${encodeURIComponent(shopId)}/reservations`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-member-id': memberId },
+    body: JSON.stringify(data),
+  });
+}
+
+export async function getShopReservations(shopId) {
+  return fetchWithRetry(`${API_BASE}/api/shops/${encodeURIComponent(shopId)}/reservations`);
+}
+
+export async function getMyReservations(memberId) {
+  return fetchWithRetry(`${API_BASE}/api/members/${encodeURIComponent(memberId)}/reservations`);
+}
+
+export async function updateReservationStatus(reservationId, status, rejectReason, memberId) {
+  return fetchWithRetry(`${API_BASE}/api/reservations/${encodeURIComponent(reservationId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', 'x-member-id': memberId },
+    body: JSON.stringify({ status, rejectReason }),
+  });
+}
+
+export async function deleteReservation(reservationId, memberId) {
+  return fetchWithRetry(`${API_BASE}/api/reservations/${encodeURIComponent(reservationId)}`, {
+    method: 'DELETE',
+    headers: { 'x-member-id': memberId },
+  });
+}
+
+export async function getVapidKey() {
+  return fetchWithRetry(`${API_BASE}/api/push/vapid-key`);
+}
+
+export async function subscribePush(subscription, memberId) {
+  return fetchWithRetry(`${API_BASE}/api/push/subscribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-member-id': memberId },
+    body: JSON.stringify(subscription),
   });
 }
