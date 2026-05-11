@@ -309,6 +309,7 @@ export default function Distribution({ initialView = "market" }) {
   const [bulkCheckoutForm, setBulkCheckoutForm] = useState({ address: "", visitNote: "", buyerName: "", buyerPhone: "" });
   const [bulkCheckoutSubmitting, setBulkCheckoutSubmitting] = useState(false);
   const [confirmModal, setConfirmModal] = useState({ open: false, lines: [], onConfirm: null });
+  const [alertModal, setAlertModal] = useState({ open: false, title: "", message: "", tone: "warning" });
   const confirmResolveRef = useRef(null);
 
   const showConfirm = (lines) => {
@@ -331,6 +332,24 @@ export default function Distribution({ initialView = "market" }) {
   const showToast = (message, type = "success") => {
     setToast({ open: true, message, type });
   };
+
+  const showAlertModal = (message, title = "안내", tone = "warning") => {
+    setAlertModal({ open: true, title, message, tone });
+  };
+
+  const closeAlertModal = () => {
+    setAlertModal((prev) => ({ ...prev, open: false }));
+  };
+
+  const alertModalNode = alertModal.open ? (
+    <div className="su-market-overlay su-market-overlay--alert" onClick={closeAlertModal}>
+      <div className="su-market-alertModal" onClick={(event) => event.stopPropagation()}>
+        <div className="su-market-alertTitle">{alertModal.title || "안내"}</div>
+        <div className={`su-market-alertMessage ${alertModal.tone === "success" ? "is-success" : "is-warning"}`}>{alertModal.message}</div>
+        <button type="button" className="su-market-alertBtn" onClick={closeAlertModal}>확인</button>
+      </div>
+    </div>
+  ) : null;
 
   const loadAll = async () => {
     setLoading(true);
@@ -465,7 +484,7 @@ export default function Distribution({ initialView = "market" }) {
 
   const handleAddToCart = (product) => {
     if (!isLoggedIn) {
-      showToast("로그인이 필요합니다.", "error");
+      showAlertModal("로그인이 필요합니다.", "로그인 필요");
       return;
     }
 
@@ -490,7 +509,7 @@ export default function Distribution({ initialView = "market" }) {
 
   const handlePointBuy = (product) => {
     if (!isLoggedIn) {
-      showToast("로그인이 필요합니다.", "error");
+      showAlertModal("로그인이 필요합니다.", "로그인 필요");
       return;
     }
     openCheckout(product, getQuantity(product.id), "direct");
@@ -515,12 +534,12 @@ export default function Distribution({ initialView = "market" }) {
     const receiveMethod = String(product.receiveMethod || "delivery").toLowerCase();
 
     if (unitPrice <= 0) {
-      showToast("포인트 결제 금액이 설정되지 않은 상품입니다.", "warning");
+      showAlertModal("포인트 결제 금액이 설정되지 않은 상품입니다.", "결제 안내");
       return;
     }
 
     if (pointBalance < totalPrice) {
-      showToast("포인트가 부족합니다. 포인트 충전 후 다시 시도해 주세요.", "error");
+      showAlertModal("포인트가 부족합니다. 포인트 충전 후 다시 시도해 주세요.", "결제 안내");
       return;
     }
 
@@ -530,22 +549,22 @@ export default function Distribution({ initialView = "market" }) {
     const buyerPhone = String(checkoutForm.buyerPhone || "").trim();
 
     if (!buyerName) {
-      showToast("구매자 이름을 입력해 주세요.", "warning");
+      showAlertModal("구매자 이름을 입력해 주세요.", "입력 안내");
       return;
     }
 
     if (!buyerPhone) {
-      showToast("전화번호를 입력해 주세요.", "warning");
+      showAlertModal("전화번호를 입력해 주세요.", "입력 안내");
       return;
     }
 
     if (receiveMethod === "delivery" && !address) {
-      showToast("택배 수령은 배송 주소를 입력해 주세요.", "warning");
+      showAlertModal("택배 수령은 배송 주소를 입력해 주세요.", "입력 안내");
       return;
     }
 
     if (receiveMethod === "pickup" && !visitNote) {
-      showToast("방문 수령 정보(요청사항/시간)를 입력해 주세요.", "warning");
+      showAlertModal("방문 수령 정보(요청사항/시간)를 입력해 주세요.", "입력 안내");
       return;
     }
 
@@ -591,7 +610,7 @@ export default function Distribution({ initialView = "market" }) {
         removeCartItem(product.id);
       }
       setCheckoutOpen(false);
-      showToast(`결제가 완료되었습니다. (${totalPrice.toLocaleString("ko-KR")}P)`, "success");
+      showAlertModal(`결제가 완료되었습니다. (${totalPrice.toLocaleString("ko-KR")}P)`, "결제 완료", "success");
       await Promise.all([loadPoint(), loadAll()]);
       window.dispatchEvent(new CustomEvent("su:ssot:changed", { detail: { type: "supplies", operation: "purchase" } }));
     } catch (error) {
@@ -641,12 +660,12 @@ export default function Distribution({ initialView = "market" }) {
     const visitNote = String(bulkCheckoutForm.visitNote || '').trim();
     const buyerName = String(bulkCheckoutForm.buyerName || '').trim();
     const buyerPhone = String(bulkCheckoutForm.buyerPhone || '').trim();
-    if (!buyerName) { showToast('구매자 이름을 입력해 주세요.', 'warning'); return; }
-    if (!buyerPhone) { showToast('전화번호를 입력해 주세요.', 'warning'); return; }
-    if (hasDelivery && !address) { showToast('택배 상품이 포함되어 있습니다. 배송 주소를 입력하세요.', 'warning'); return; }
-    if (hasPickup && !visitNote) { showToast('방문 상품이 포함되어 있습니다. 방문 정보를 입력하세요.', 'warning'); return; }
+    if (!buyerName) { showAlertModal('구매자 이름을 입력해 주세요.', '입력 안내'); return; }
+    if (!buyerPhone) { showAlertModal('전화번호를 입력해 주세요.', '입력 안내'); return; }
+    if (hasDelivery && !address) { showAlertModal('택배 상품이 포함되어 있습니다. 배송 주소를 입력하세요.', '입력 안내'); return; }
+    if (hasPickup && !visitNote) { showAlertModal('방문 상품이 포함되어 있습니다. 방문 정보를 입력하세요.', '입력 안내'); return; }
     const totalAll = cartItems.reduce((sum, c) => sum + toNumber(c.product.price, 0) * Math.max(1, c.quantity), 0);
-    if (pointBalance < totalAll) { showToast('포인트가 부족합니다.', 'error'); return; }
+    if (pointBalance < totalAll) { showAlertModal('포인트가 부족합니다.', '결제 안내'); return; }
     setBulkCheckoutOpen(false);
     const bulkConfirmed = await showConfirm([`장바구니 상품 ${cartItems.length}종`, `총 ${totalAll.toLocaleString('ko-KR')}P`, '일괄결제를 진행하시겠습니까?']);
     if (!bulkConfirmed) { setBulkCheckoutOpen(true); return; }
@@ -689,7 +708,7 @@ export default function Distribution({ initialView = "market" }) {
     setCartOpen(false);
     if (successCount > 0) {
       setCartItems([]);
-      showToast(`${successCount}종 결제 완료입니다.${failCount > 0 ? ` (${failCount}종 실패)` : ''}`, 'success');
+      showAlertModal(`${successCount}종 결제 완료입니다.${failCount > 0 ? ` (${failCount}종 실패)` : ''}`, '결제 완료', 'success');
     } else {
       showToast('일괄결제에 실패했습니다. 다시 시도해 주세요.', 'error');
     }
@@ -771,6 +790,7 @@ export default function Distribution({ initialView = "market" }) {
           onClose={() => setToast((prev) => ({ ...prev, open: false }))}
           duration={2200}
         />
+        {alertModalNode}
         <PageHeader title="유통지원 상품상세" onBack={() => navigate("/distribution")} />
 
         {loading ? <div className="su-market-empty">상품 정보를 불러오는 중입니다...</div> : null}
@@ -1032,6 +1052,7 @@ export default function Distribution({ initialView = "market" }) {
         onClose={() => setToast((prev) => ({ ...prev, open: false }))}
         duration={2200}
       />
+      {alertModalNode}
       <PageHeader title="유통지원" onBack={() => navigate("/home")} />
 
       <header className="su-market-top">
@@ -2076,6 +2097,10 @@ const SUPPORT_MARKET_CSS = `
   padding: 16px;
 }
 
+.su-market-overlay--alert {
+  z-index: 1600;
+}
+
 /* ── 확인 모달 ── */
 .su-market-confirmModal {
   width: min(90%, 380px);
@@ -2134,6 +2159,63 @@ const SUPPORT_MARKET_CSS = `
   color: #ffffff;
 }
 .su-market-confirmBtn--ok:active {
+  background: #0c5e73;
+}
+
+/* ── 안내 모달 ── */
+.su-market-alertModal {
+  width: min(90%, 360px);
+  border-radius: 20px;
+  background: linear-gradient(180deg, #ffffff, #f8fbff);
+  box-shadow: 0 16px 44px rgba(2, 22, 46, 0.28);
+  border: 1px solid #d7e0ea;
+  padding: 18px;
+  display: grid;
+  gap: 12px;
+  animation: confirmSlideUp 0.25s ease-out;
+}
+
+.su-market-alertTitle {
+  font-size: 17px;
+  font-weight: 900;
+  color: #0f172a;
+}
+
+.su-market-alertMessage {
+  border: 1px solid #fde68a;
+  background: #fff7db;
+  color: #92400e;
+  border-radius: 12px;
+  padding: 12px;
+  line-height: 1.5;
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.su-market-alertMessage.is-warning {
+  border-color: #fde68a;
+  background: #fff7db;
+  color: #92400e;
+}
+
+.su-market-alertMessage.is-success {
+  border-color: #86efac;
+  background: #ecfdf3;
+  color: #166534;
+}
+
+.su-market-alertBtn {
+  min-height: 44px;
+  border: 1px solid #0f766e;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #0f766e, #14b8a6);
+  color: #ffffff;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.su-market-alertBtn:active {
   background: #0c5e73;
 }
 
