@@ -6,6 +6,7 @@ import {
   createSupply,
   createSupplyRequest,
   fetchSupplies,
+  getRegions as getRegionsServer,
   getMembers as getMembersServer,
   getPointBalance,
   getSupplyRequests,
@@ -65,7 +66,7 @@ function readPointBalance(result) {
   return 0;
 }
 
-function normalizeSupply(raw, memberById) {
+function normalizeSupply(raw, memberById, regionNameById) {
   const id = String(raw?.id || raw?.supplyId || raw?.supply_id || "").trim();
   const createdBy = String(raw?.createdBy || raw?.created_by || raw?.managerId || "").trim();
   const uploadMeta = typeof raw?.uploadMeta === "string"
@@ -81,6 +82,7 @@ function normalizeSupply(raw, memberById) {
   const seller = createdBy ? memberById.get(createdBy) : null;
   const status = String(raw?.status || "available").toLowerCase();
   const type = String(raw?.type || raw?.category || "daily").toLowerCase();
+  const regionId = String(raw?.regionId || raw?.region_id || "").trim();
 
   return {
     id,
@@ -99,7 +101,8 @@ function normalizeSupply(raw, memberById) {
     videoUrl: String(uploadMeta?.videoUrl || "").trim(),
     pdfUrl: String(uploadMeta?.pdfUrl || "").trim(),
     status,
-    regionId: String(raw?.regionId || raw?.region_id || "").trim(),
+    regionId,
+    regionName: String(raw?.regionName || raw?.region_name || regionNameById.get(regionId) || "").trim(),
     receiveMethod: String(uploadMeta?.receiveMethod || "delivery").trim().toLowerCase(),
     createdBy,
     sellerName: seller?.name || seller?.nickname || uploadMeta?.manager || createdBy || "판매자",
@@ -354,10 +357,11 @@ export default function Distribution({ initialView = "market" }) {
   const loadAll = async () => {
     setLoading(true);
     try {
-      const [supplies, members, requests] = await Promise.all([
+      const [supplies, members, requests, regions] = await Promise.all([
         fetchSupplies(),
         getMembersServer().catch(() => []),
         isLoggedIn ? getSupplyRequests({ requesterId: memberId, requestType: "distribution" }).catch(() => []) : Promise.resolve([]),
+        getRegionsServer().catch(() => []),
       ]);
 
       const memberById = new Map(
@@ -367,8 +371,15 @@ export default function Distribution({ initialView = "market" }) {
         ])
       );
 
+      const regionNameById = new Map(
+        (Array.isArray(regions) ? regions : []).map((region) => [
+          String(region.id || region.regionId || region.region_id || "").trim(),
+          String(region.name || region.region_name || region.title || "").trim(),
+        ])
+      );
+
       const normalized = (Array.isArray(supplies) ? supplies : [])
-        .map((item) => normalizeSupply(item, memberById))
+        .map((item) => normalizeSupply(item, memberById, regionNameById))
         .filter((item) => item.id)
         .filter((item) => String(item.status || "").toLowerCase() !== "deleted")
         .filter((item) => String(item.category || "") !== "request");
@@ -812,7 +823,7 @@ export default function Distribution({ initialView = "market" }) {
             <div className="su-market-detailBody">
               <h1>{selectedProduct.title}</h1>
               <div className="su-market-detailMeta">
-                판매자 {selectedProduct.sellerName} · {selectedProduct.regionId || "지역공유"}
+                판매자 {selectedProduct.sellerName} · {selectedProduct.regionName || selectedProduct.regionId || "지역공유"}
               </div>
               <div className="su-market-detailPrice">{formatPrice(selectedProduct.price)}</div>
 
