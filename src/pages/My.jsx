@@ -18,6 +18,7 @@ import { calculateStatus } from "../lib/adminStore";
 import * as shopStore from "../lib/shopStore";
 import { getShops, loadShops } from "../lib/shopStore";
 import Toast from "../components/Toast";
+import SiteConfirmModal from "../components/SiteConfirmModal";
 
 // ★ 포인트 타입 라벨 (서버 기반)
 const POINT_TYPE_LABELS = {
@@ -1120,7 +1121,15 @@ export default function My() {
   const [selectedVoucherShop, setSelectedVoucherShop] = useState(null);
   const [voucherActionLoading, setVoucherActionLoading] = useState(false);
   const [voucherActionSubmitting, setVoucherActionSubmitting] = useState(false);
+  const [voucherConfirmState, setVoucherConfirmState] = useState({
+    open: false,
+    title: '',
+    message: '',
+    details: [],
+    confirmText: '확인',
+  });
   const [voucherCancellingSerial, setVoucherCancellingSerial] = useState('');
+  const voucherConfirmResolverRef = useRef(null);
   const [missionParticipations, setMissionParticipations] = useState([]);
   const [participationLoading, setParticipationLoading] = useState(false);
   // 결제 모드: qr(기본) 또는 search(상점검색결제)
@@ -1243,6 +1252,25 @@ export default function My() {
     setSelectedVoucherShop(null);
   };
 
+  const requestVoucherConfirm = ({ title, message, details = [], confirmText = '확인' }) =>
+    new Promise((resolve) => {
+      voucherConfirmResolverRef.current = resolve;
+      setVoucherConfirmState({
+        open: true,
+        title,
+        message,
+        details,
+        confirmText,
+      });
+    });
+
+  const closeVoucherConfirm = (confirmed) => {
+    const resolver = voucherConfirmResolverRef.current;
+    voucherConfirmResolverRef.current = null;
+    setVoucherConfirmState((prev) => ({ ...prev, open: false }));
+    if (resolver) resolver(confirmed);
+  };
+
   const openVoucherAction = async (mode, card) => {
     setVoucherActionCardSerial(card.serial);
     setVoucherActionMode(mode);
@@ -1358,7 +1386,16 @@ export default function My() {
       ? `${targetName || '선택한 상점'}에 ${formatVoucherAmount(currentVoucherActionCard.cardAmount)} 상품권으로 결제하시겠습니까?`
       : `${targetName || '선택한 회원'}에게 ${formatVoucherAmount(currentVoucherActionCard.cardAmount)} 상품권을 전송하시겠습니까?`;
 
-    if (!window.confirm(confirmMessage)) {
+    const confirmed = await requestVoucherConfirm({
+      title: voucherActionMode === 'shop' ? '상점 결제' : '회원 전송',
+      message: confirmMessage,
+      details: [
+        `상품권 금액 ${formatVoucherAmount(currentVoucherActionCard.cardAmount)}`,
+        `대상 ${targetName || (voucherActionMode === 'shop' ? '선택한 상점' : '선택한 회원')}`,
+      ],
+      confirmText: voucherActionMode === 'shop' ? '결제 실행' : '전송 실행',
+    });
+    if (!confirmed) {
       return;
     }
 
@@ -6293,6 +6330,17 @@ export default function My() {
   {renderDistributionFormModal()}
   {renderAllRequestsModal()}
   {renderAllPurchasesModal()}
+  <SiteConfirmModal
+    open={voucherConfirmState.open}
+    title={voucherConfirmState.title}
+    message={voucherConfirmState.message}
+    details={voucherConfirmState.details}
+    confirmText={voucherConfirmState.confirmText}
+    cancelText="취소"
+    tone="teal"
+    onCancel={() => closeVoucherConfirm(false)}
+    onConfirm={() => closeVoucherConfirm(true)}
+  />
 
   {/* 명함 없음 확인 모달 */}
   {showNoCardConfirm && (

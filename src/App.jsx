@@ -60,6 +60,7 @@ import Missions from "./pages/Missions";
 import Support from "./pages/Support";
 import Distribution from "./pages/Distribution";
 import Card from "./pages/Card";
+import SiteConfirmModal from "./components/SiteConfirmModal";
 
 // ⚡ 코드 스플리팅: 관리자 페이지는 lazy loading
 const AdminLogin = lazy(() => import("./pages/admin/AdminLogin"));
@@ -1486,6 +1487,7 @@ function AppBottomNav({ isLoggedIn, authReady, onLogout }) {
   const navigate = useNavigate();
   const location = useLocation();
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [showHomeConfirm, setShowHomeConfirm] = useState(false);
   const [bottomBanner, setBottomBanner] = useState(null);
   const [bannerClosed, setBannerClosed] = useState(() => {
     try {
@@ -1541,7 +1543,10 @@ function AppBottomNav({ isLoggedIn, authReady, onLogout }) {
       key: "home",
       label: "메인홈",
       active: currentPath === "/home" || currentPath === "/",
-      onClick: () => navigate("/home"),
+      onClick: () => {
+        if (currentPath === "/home" || currentPath === "/") return;
+        setShowHomeConfirm(true);
+      },
     },
     {
       key: "auth",
@@ -1874,6 +1879,18 @@ function AppBottomNav({ isLoggedIn, authReady, onLogout }) {
         </>,
         document.body
       ) : null}
+      <SiteConfirmModal
+        open={showHomeConfirm}
+        title="메인홈 이동"
+        message="메인홈으로 이동하시겠습니까?"
+        confirmText="확인"
+        cancelText="취소"
+        onCancel={() => setShowHomeConfirm(false)}
+        onConfirm={() => {
+          setShowHomeConfirm(false);
+          navigate("/home");
+        }}
+      />
     </>
   );
 }
@@ -3996,8 +4013,16 @@ function PointWalletBridge() {
   const [amountInput, setAmountInput] = useState("");
   const [actionLoading, setActionLoading] = useState(false);
   const [actionSubmitting, setActionSubmitting] = useState(false);
+  const [actionConfirmState, setActionConfirmState] = useState({
+    open: false,
+    title: "",
+    message: "",
+    details: [],
+    confirmText: "확인",
+  });
   const [pointHistoryExpanded, setPointHistoryExpanded] = useState(false);
   const [reloadTick, setReloadTick] = useState(0);
+  const actionConfirmResolverRef = useRef(null);
 
   const formatPointAmount = (value) => `${(Number(value) || 0).toLocaleString("ko-KR")} P`;
 
@@ -4026,6 +4051,25 @@ function PointWalletBridge() {
       memberId: String(session?.memberId || currentUser?.memberId || currentUser?.id || "").trim(),
       memberName: String(currentUser?.name || session?.name || "").trim(),
     };
+  };
+
+  const requestActionConfirm = ({ title, message, details = [], confirmText = "확인" }) =>
+    new Promise((resolve) => {
+      actionConfirmResolverRef.current = resolve;
+      setActionConfirmState({
+        open: true,
+        title,
+        message,
+        details,
+        confirmText,
+      });
+    });
+
+  const closeActionConfirm = (confirmed) => {
+    const resolver = actionConfirmResolverRef.current;
+    actionConfirmResolverRef.current = null;
+    setActionConfirmState((prev) => ({ ...prev, open: false }));
+    if (resolver) resolver(confirmed);
   };
 
   const normalizePointHistoryEntry = (entry, index) => {
@@ -4278,8 +4322,13 @@ function PointWalletBridge() {
       return;
     }
 
-    const confirmText = `${selectedTargetName || "선택한 상점"}에 ${formatPointAmount(amountValue)} 결제하시겠습니까?`;
-    if (!window.confirm(confirmText)) return;
+    const confirmed = await requestActionConfirm({
+      title: "상점 결제",
+      message: `${selectedTargetName || "선택한 상점"}에 ${formatPointAmount(amountValue)} 결제하시겠습니까?`,
+      details: [`결제 후 예상 잔액 ${formatPointAmount(pointBalance - amountValue)}`],
+      confirmText: "결제 실행",
+    });
+    if (!confirmed) return;
 
     try {
       setActionSubmitting(true);
@@ -4351,8 +4400,13 @@ function PointWalletBridge() {
       return;
     }
 
-    const confirmText = `${selectedTargetName || "선택한 회원"}에게 ${formatPointAmount(amountValue)} 보내시겠습니까?`;
-    if (!window.confirm(confirmText)) return;
+    const confirmed = await requestActionConfirm({
+      title: "포인트 보내기",
+      message: `${selectedTargetName || "선택한 회원"}에게 ${formatPointAmount(amountValue)} 보내시겠습니까?`,
+      details: [`전송 후 예상 잔액 ${formatPointAmount(pointBalance - amountValue)}`],
+      confirmText: "전송 실행",
+    });
+    if (!confirmed) return;
 
     try {
       setActionSubmitting(true);
@@ -4605,6 +4659,17 @@ function PointWalletBridge() {
         </div>,
         document.body
       ) : null}
+      <SiteConfirmModal
+        open={actionConfirmState.open}
+        title={actionConfirmState.title}
+        message={actionConfirmState.message}
+        details={actionConfirmState.details}
+        confirmText={actionConfirmState.confirmText}
+        cancelText="취소"
+        tone="teal"
+        onCancel={() => closeActionConfirm(false)}
+        onConfirm={() => closeActionConfirm(true)}
+      />
     </>,
     mountNode
   );

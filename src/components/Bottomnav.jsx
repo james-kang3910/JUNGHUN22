@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { NavLink, useNavigate, useLocation } from "react-router-dom";
 import { NAV_ITEMS } from "../routesMap";
 import { isLoggedIn as checkLoggedIn, signOut, getSession } from "../lib/authStore";
+import SiteConfirmModal from "./SiteConfirmModal";
 
 // ★ pendingTab 관리 (sessionStorage 기반)
 const PENDING_TAB_KEY = "su_pending_tab";
@@ -230,8 +231,15 @@ export default function BottomNav(props) {
     }
   };
 
+  const handleHomeClick = (e) => {
+    if (location.pathname === "/home" || location.pathname === "/") return;
+    e.preventDefault();
+    setShowHomeConfirm(true);
+  };
+
   // ★ 로그아웃 확인 팝업 상태
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [showHomeConfirm, setShowHomeConfirm] = useState(false);
 
   // ★ 하단 배너 광고 슬롯
   const [bottomBanner, setBottomBanner] = useState(null);
@@ -537,6 +545,7 @@ export default function BottomNav(props) {
             key={item.key}
             to={item.path}
             end={item.key === "home"}
+            onClick={item.key === "home" ? handleHomeClick : undefined}
             style={() => ({ ...itemBase, ...(isItemActive ? activeStyle : {}) })}
             aria-current={isItemActive ? "page" : undefined}
           >
@@ -593,6 +602,18 @@ export default function BottomNav(props) {
         </>,
         document.body
       )}
+      <SiteConfirmModal
+        open={showHomeConfirm}
+        title="메인홈 이동"
+        message="메인홈으로 이동하시겠습니까?"
+        confirmText="확인"
+        cancelText="취소"
+        onCancel={() => setShowHomeConfirm(false)}
+        onConfirm={() => {
+          setShowHomeConfirm(false);
+          navigate("/home");
+        }}
+      />
     </nav>
     </>
   );
