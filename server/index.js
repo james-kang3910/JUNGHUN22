@@ -14071,7 +14071,8 @@ app.post('/api/points/admin/grant', requireAuth, async (req, res) => {
     }
     
     const now = new Date().toISOString();
-    
+    await syncPointLedgerSeq(); // 지급 직전 시퀀스 보정
+
     if (USE_POSTGRES) {
       await db.run(
         `INSERT INTO point_ledger(member_id, amount, type, description, reference_id, reference_type, admin_id, status, created_at)
@@ -14122,6 +14123,7 @@ app.post('/api/points/pay', requireAuth, async (req, res) => {
     const referenceType = referenceId.startsWith('DIST_ORDER_') ? 'DISTRIBUTION_ORDER' : 'STORE';
     
     // Deduct points (negative amount)
+    await syncPointLedgerSeq(); // 결제 직전 시퀀스 보정
     if (USE_POSTGRES) {
       await db.run(
         `INSERT INTO point_ledger(member_id, amount, type, description, reference_id, reference_type, status, created_at)
@@ -14208,6 +14210,7 @@ app.post('/api/points/transfer', requireAuth, async (req, res) => {
     const senderDescription = String(description || `포인트 전송 (→ ${receiverName})`).trim();
     const receiverDescription = `포인트 수신 (← ${senderName})`;
 
+    await syncPointLedgerSeq(); // 전송 직전 시퀀스 보정
     if (USE_POSTGRES) {
       await db.run('BEGIN');
       try {
@@ -18409,6 +18412,16 @@ app.patch('/api/shop-payout-requests/:id/handle', async (req, res) => {
   }
 });
 
+// point_ledger SERIAL 시퀀스 보정 — OVERRIDING SYSTEM VALUE 삽입 후 시퀀스가 뒤처지는 것 방지
+async function syncPointLedgerSeq() {
+  if (!USE_POSTGRES) return;
+  try {
+    await db.run(`SELECT setval('point_ledger_ledger_id_seq', GREATEST(COALESCE((SELECT MAX(ledger_id) FROM point_ledger), 1), 1))`);
+  } catch(e) {
+    logger.warn('[syncPointLedgerSeq] 시퀀스 보정 실패:', e.message);
+  }
+}
+
 // 서버 시작 시 reviews.status 정제 + shops.rating/review_count 일괄 재계산
 async function repairRatingData() {
   if (!USE_POSTGRES) return;
@@ -18678,6 +18691,7 @@ async function startServer() {
   try {
     await initDatabase();
     await repairRatingData();
+    await syncPointLedgerSeq(); // 모든 마이그레이션 완료 후 최종 시퀀스 보정
     app.listen(PORT, '0.0.0.0', () => {
       logger.info(`Server listening on http://0.0.0.0:${PORT}`);
     });
