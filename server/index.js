@@ -8,6 +8,8 @@ try {
   // If dotenv is not installed in the environment, ignore (production platforms inject env vars)
 }
 
+const http = require('http');
+const { Server: SocketIOServer } = require('socket.io');
 const express = require('express');
 const cors = require('cors');
 const bodyParser = require('body-parser');
@@ -433,6 +435,59 @@ async function canModerateAuditionSubmission(memberId, role, submissionId) {
     [memberId, submissionId]
   );
   return !!row;
+}
+
+function getSubmissionApprovalStatus(row) {
+  if (!row) return 'pending';
+  const raw = USE_POSTGRES ? row.approval_status : row.approvalStatus;
+  const status = String(raw || 'pending').trim().toLowerCase();
+  if (status === 'pending' || status === 'approved' || status === 'rejected') return status;
+  return 'pending';
+}
+
+function mapAuditionSubmissionForViewer(row, auth = {}, options = {}) {
+  const memberId = USE_POSTGRES ? row.member_id : row.memberId;
+  const approvalStatus = getSubmissionApprovalStatus(row);
+  const isAdmin = isAdminRole(auth.role);
+  const isOwner = auth.memberId && String(auth.memberId) === String(memberId);
+  const canViewMedia = approvalStatus === 'approved' || isAdmin;
+  const includeInList = approvalStatus === 'approved' || isAdmin || isOwner;
+  if (!includeInList && !options.forceInclude) return null;
+
+  const base = USE_POSTGRES ? {
+    id: row.submission_id,
+    submissionId: row.submission_id,
+    auditionId: row.audition_id,
+    memberId: row.member_id,
+    memberName: row.member_name,
+    title: row.title,
+    mediaType: canViewMedia ? row.media_type : 'locked',
+    mediaUrl: canViewMedia ? row.media_url : '',
+    thumbnailUrl: canViewMedia ? row.thumbnail_url : '',
+    rankLabel: row.rank_label || '',
+    votesCount: row.votes_count || row.votesCount || 0,
+    voted: !!row.voted,
+    approvalStatus,
+    locked: !canViewMedia,
+    createdAt: row.created_at,
+  } : {
+    id: row.submissionId,
+    submissionId: row.submissionId,
+    auditionId: row.auditionId,
+    memberId: row.memberId,
+    memberName: row.member_name,
+    title: row.title,
+    mediaType: canViewMedia ? row.mediaType : 'locked',
+    mediaUrl: canViewMedia ? row.mediaUrl : '',
+    thumbnailUrl: canViewMedia ? row.thumbnailUrl : '',
+    rankLabel: row.rankLabel || '',
+    votesCount: row.votesCount || row.votes_count || 0,
+    voted: !!row.voted,
+    approvalStatus,
+    locked: !canViewMedia,
+    createdAt: row.createdAt,
+  };
+  return base;
 }
 
 async function getOptionalAuth(req) {
@@ -2277,6 +2332,10 @@ async function initDatabase() {
         // ✨ ADD: votes_count 컬럼 추가
         try { await db.run(`ALTER TABLE audition_submissions ADD COLUMN votes_count INTEGER DEFAULT 0`); } catch (e) {}
         try { await db.run(`ALTER TABLE audition_submissions ADD COLUMN rank_label VARCHAR(120)`); } catch (e) {}
+        try { await db.run(`ALTER TABLE audition_submissions ADD COLUMN IF NOT EXISTS approval_status VARCHAR(20) DEFAULT 'pending'`); } catch (e) {}
+        try {
+          await db.run(`UPDATE audition_submissions SET approval_status = 'approved' WHERE approval_status IS NULL OR approval_status = ''`);
+        } catch (e) {}
         // ✨ FIX: member_id 타입을 INTEGER로 변경 (members.member_id와 타입 일치)
         try {
           await db.run(`ALTER TABLE audition_submissions ALTER COLUMN member_id TYPE INTEGER USING member_id::integer`);
@@ -2301,6 +2360,10 @@ async function initDatabase() {
         // ✨ ADD: votesCount 컬럼 추가
         try { await db.run(`ALTER TABLE audition_submissions ADD COLUMN votesCount INTEGER DEFAULT 0`); } catch (e) {}
         try { await db.run(`ALTER TABLE audition_submissions ADD COLUMN rankLabel TEXT`); } catch (e) {}
+        try { await db.run(`ALTER TABLE audition_submissions ADD COLUMN approvalStatus TEXT DEFAULT 'pending'`); } catch (e) {}
+        try {
+          await db.run(`UPDATE audition_submissions SET approvalStatus = 'approved' WHERE approvalStatus IS NULL OR approvalStatus = ''`);
+        } catch (e) {}
       }
       logger.info('audition_submissions table ensured');
     } catch (e) {
@@ -3168,7 +3231,7 @@ app.use('/api', (req, res, next) => {
   console.log('├─ Referer:', req.headers.referer || '(none)');
   console.log('├─ Cookie:', cookiePreview);
   console.log('├─ Query:', Object.keys(req.query).length > 0 ? req.query : '(none)');
-  if (req.method === 'POST' || req.method === 'PUT' || req.method === 'DELETE') {
+  if (req.method === 'POST' || req.method === 'PUT' || req.method === 'PATCH' || req.method === 'DELETE') {
     console.log('├─ Body:', req.body);
   }
   console.groupEnd();
@@ -3826,13 +3889,23 @@ app.post('/api/auth/login', async (req, res) => {
     if (process.env.NODE_ENV !== 'production' && String(identifier) === 'admin' && String(password) === '1234') {
       const nowDev = new Date().toISOString();
       const sessionIdDev = `SESSION_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
-      const sessionQueryDev = USE_POSTGRES
-        ? `INSERT INTO sessions(session_id, member_id, status, signed_at) VALUES($1, $2, $3, $4)`
-        : `INSERT INTO sessions(sessionId, memberId, status, signedAt) VALUES(?, ?, ?, ?)`;
-      await db.run(sessionQueryDev, [sessionIdDev, 'admin', 'ACTIVE', nowDev]);
+      // WEBSITE_ADMIN 계정 조회 후 실제 member_id 사용 (FK 제약 우회)
+      let devMemberId = null;
+      try {
+        const adminRow = await db.get(
+          `SELECT member_id FROM members WHERE role IN ('WEBSITE_ADMIN','SUPER_ADMIN','ADMIN') ORDER BY member_id ASC LIMIT 1`
+        );
+        devMemberId = adminRow?.member_id ?? null;
+      } catch (e) { /* ignore */ }
+      if (devMemberId != null) {
+        const sessionQueryDev = USE_POSTGRES
+          ? `INSERT INTO sessions(session_id, member_id, status, signed_at) VALUES($1, $2, $3, $4)`
+          : `INSERT INTO sessions(sessionId, memberId, status, signedAt) VALUES(?, ?, ?, ?)`;
+        try { await db.run(sessionQueryDev, [sessionIdDev, devMemberId, 'ACTIVE', nowDev]); } catch (e) { /* ignore */ }
+      }
       try { res.cookie('su_token', sessionIdDev, { httpOnly: true, sameSite: 'lax', path: '/' }); } catch (e) {}
       _clearAttempts(_attempts.login, _ip);
-      return jsonOk(res, { token: sessionIdDev, member: { memberId: 'admin', email: 'admin', name: 'Developer', status: 'ACTIVE', role: 'WEBSITE_ADMIN' } });
+      return jsonOk(res, { token: sessionIdDev, member: { memberId: devMemberId ?? 'admin', email: 'admin', name: 'Developer', status: 'ACTIVE', role: 'WEBSITE_ADMIN' } });
     }
 
     // 이메일/휴대폰번호/memberId(기존 아이디)로 조회
@@ -11396,6 +11469,7 @@ app.get('/api/auditions/highlights', async (req, res) => {
                 COALESCE((SELECT MAX(v.created_at) FROM audition_votes v WHERE v.submission_id = s.submission_id), s.created_at) AS last_vote_at
          FROM audition_submissions s
          JOIN auditions a ON a.audition_id = s.audition_id
+         WHERE COALESCE(s.approval_status, 'pending') = 'approved'
          ORDER BY s.votes_count DESC, last_vote_at ASC
          LIMIT 1`,
         []
@@ -11410,6 +11484,7 @@ app.get('/api/auditions/highlights', async (req, res) => {
         `SELECT s.*, a.title AS audition_title, a.auditionId, a.posterUrl, a.imageUrl, a.images
          FROM audition_submissions s
          JOIN auditions a ON a.auditionId = s.auditionId
+         WHERE COALESCE(s.approvalStatus, 'pending') = 'approved'
          ORDER BY s.votesCount DESC, s.createdAt ASC
          LIMIT 1`,
         []
@@ -11807,19 +11882,10 @@ app.delete('/api/auditions/:id', async (req, res) => {
 app.get('/api/auditions/:id/submissions', async (req, res) => {
   try {
     const auditionId = USE_POSTGRES ? parseInt(req.params.id, 10) : req.params.id;
+    const auth = await getOptionalAuth(req);
 
     // detect current session (if any) to include 'voted' flag per submission
-    const token = getAuthToken(req);
-    let voterId = null;
-    if (token) {
-      const session = await db.get(
-        USE_POSTGRES
-          ? 'SELECT member_id FROM sessions WHERE session_id = $1'
-          : 'SELECT memberId FROM sessions WHERE sessionId = ?',
-        [token]
-      );
-      if (session) voterId = USE_POSTGRES ? session.member_id : session.memberId;
-    }
+    const voterId = auth.memberId || null;
 
     let rows;
     if (USE_POSTGRES) {
@@ -11851,7 +11917,6 @@ app.get('/api/auditions/:id/submissions', async (req, res) => {
                        LEFT JOIN audition_votes v ON v.submissionId = s.submissionId AND v.voterId = ?
                        WHERE s.auditionId = ?
                        ORDER BY s.votesCount DESC, s.createdAt ASC`;
-        // note: sqlite positional params order
         rows = await db.query(query, [voterId, auditionId]);
       } else {
         const query = `SELECT s.*, m.name as member_name, 0 as voted
@@ -11862,35 +11927,10 @@ app.get('/api/auditions/:id/submissions', async (req, res) => {
         rows = await db.query(query, [auditionId]);
       }
     }
-    
-    // Normalize
-    const normalized = rows.map(r => USE_POSTGRES ? {
-      id: r.submission_id,
-      auditionId: r.audition_id,
-      memberId: r.member_id,
-      memberName: r.member_name,
-      title: r.title,
-      mediaType: r.media_type,
-      mediaUrl: r.media_url,
-      thumbnailUrl: r.thumbnail_url,
-      rankLabel: r.rank_label || '',
-      votesCount: r.votes_count || r.votesCount || 0,
-      voted: !!r.voted,
-      createdAt: r.created_at
-    } : {
-      id: r.submissionId,
-      auditionId: r.auditionId,
-      memberId: r.memberId,
-      memberName: r.member_name,
-      title: r.title,
-      mediaType: r.mediaType,
-      mediaUrl: r.mediaUrl,
-      thumbnailUrl: r.thumbnailUrl,
-      rankLabel: r.rankLabel || '',
-      votesCount: r.votesCount || r.votes_count || 0,
-      voted: !!r.voted,
-      createdAt: r.createdAt
-    });
+
+    const normalized = (rows || [])
+      .map((r) => mapAuditionSubmissionForViewer(r, auth))
+      .filter(Boolean);
     
     res.json(normalized);
   } catch (err) {
@@ -11943,8 +11983,8 @@ app.post('/api/auditions/:id/submissions', async (req, res) => {
     
     if (USE_POSTGRES) {
       const query = `
-        INSERT INTO audition_submissions(audition_id, member_id, title, media_type, media_url, thumbnail_url, created_at)
-        VALUES($1, $2, $3, $4, $5, $6, $7)
+        INSERT INTO audition_submissions(audition_id, member_id, title, media_type, media_url, thumbnail_url, approval_status, created_at)
+        VALUES($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING submission_id
       `;
       const result = await db.query(query, [
@@ -11954,14 +11994,15 @@ app.post('/api/auditions/:id/submissions', async (req, res) => {
         mediaType,
         mediaUrl,
         thumbnailUrl || null,
+        'pending',
         now
       ]);
       const submissionId = result && result[0] ? result[0].submission_id : null;
-      res.json({ ok: true, submissionId });
+      res.json({ ok: true, submissionId, approvalStatus: 'pending' });
     } else {
       const query = `
-        INSERT INTO audition_submissions(auditionId, memberId, title, mediaType, mediaUrl, thumbnailUrl, createdAt)
-        VALUES(?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO audition_submissions(auditionId, memberId, title, mediaType, mediaUrl, thumbnailUrl, approvalStatus, createdAt)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?)
       `;
       const result = await db.run(query, [
         auditionId,
@@ -11970,10 +12011,11 @@ app.post('/api/auditions/:id/submissions', async (req, res) => {
         mediaType,
         mediaUrl,
         thumbnailUrl || null,
+        'pending',
         now
       ]);
       const submissionId = result && result.lastID ? result.lastID : null;
-      res.json({ ok: true, submissionId });
+      res.json({ ok: true, submissionId, approvalStatus: 'pending' });
     }
   } catch (err) {
     logger.error('Error creating submission:', err);
@@ -12045,13 +12087,21 @@ app.patch('/api/auditions/:id/submissions/:sid', requireAuth, async (req, res) =
     const allowed = await canModerateAuditionSubmission(req.authMemberId, req.authRole, submissionId);
     if (!allowed) return res.status(403).json({ error: 'Forbidden' });
 
-    const nextTitle = req.body?.title !== undefined ? String(req.body.title || '').trim() : undefined;
-    const nextRankLabel = req.body?.rankLabel !== undefined ? String(req.body.rankLabel || '').trim() : undefined;
-    if (nextTitle === undefined && nextRankLabel === undefined) {
+    const body = req.body || {};
+    const nextTitle = body.title !== undefined ? String(body.title || '').trim() : undefined;
+    const nextRankLabel = body.rankLabel !== undefined ? String(body.rankLabel || '').trim() : undefined;
+    const rawApprovalStatus = body.approvalStatus !== undefined ? body.approvalStatus : body.approval_status;
+    const nextApprovalStatus = rawApprovalStatus !== undefined
+      ? String(rawApprovalStatus || '').trim().toLowerCase()
+      : undefined;
+    if (nextTitle === undefined && nextRankLabel === undefined && nextApprovalStatus === undefined) {
       return res.status(400).json({ error: 'no fields' });
     }
     if (nextTitle !== undefined && !nextTitle) {
       return res.status(400).json({ error: 'title required' });
+    }
+    if (nextApprovalStatus !== undefined && !['pending', 'approved', 'rejected'].includes(nextApprovalStatus)) {
+      return res.status(400).json({ error: 'invalid approvalStatus' });
     }
 
     let updated = null;
@@ -12066,12 +12116,16 @@ app.patch('/api/auditions/:id/submissions/:sid', requireAuth, async (req, res) =
         fields.push(`rank_label = $${values.length + 1}`);
         values.push(nextRankLabel || null);
       }
+      if (nextApprovalStatus !== undefined) {
+        fields.push(`approval_status = $${values.length + 1}`);
+        values.push(nextApprovalStatus);
+      }
       values.push(submissionId);
       updated = await db.get(
         `UPDATE audition_submissions
             SET ${fields.join(', ')}
           WHERE submission_id = $${values.length}
-        RETURNING submission_id, audition_id, member_id, title, media_type, media_url, thumbnail_url, votes_count, rank_label, created_at`,
+        RETURNING submission_id, audition_id, member_id, title, media_type, media_url, thumbnail_url, votes_count, rank_label, approval_status, created_at`,
         values
       );
     } else {
@@ -12085,10 +12139,14 @@ app.patch('/api/auditions/:id/submissions/:sid', requireAuth, async (req, res) =
         fields.push('rankLabel = ?');
         values.push(nextRankLabel || null);
       }
+      if (nextApprovalStatus !== undefined) {
+        fields.push('approvalStatus = ?');
+        values.push(nextApprovalStatus);
+      }
       values.push(submissionId);
       await db.run(`UPDATE audition_submissions SET ${fields.join(', ')} WHERE submissionId = ?`, values);
       updated = await db.get(
-        `SELECT submissionId, auditionId, memberId, title, mediaType, mediaUrl, thumbnailUrl, votesCount, rankLabel, createdAt
+        `SELECT submissionId, auditionId, memberId, title, mediaType, mediaUrl, thumbnailUrl, votesCount, rankLabel, approvalStatus, createdAt
            FROM audition_submissions
           WHERE submissionId = ?`,
         [submissionId]
@@ -12100,15 +12158,22 @@ app.patch('/api/auditions/:id/submissions/:sid', requireAuth, async (req, res) =
       submissionId: updated.submission_id,
       rankLabel: updated.rank_label || '',
       title: updated.title,
+      approvalStatus: updated.approval_status,
     } : {
       submissionId: updated.submissionId,
       rankLabel: updated.rankLabel || '',
       title: updated.title,
+      approvalStatus: updated.approvalStatus,
     });
+
+    const mapped = mapAuditionSubmissionForViewer(updated, {
+      memberId: req.authMemberId,
+      role: req.authRole,
+    }, { forceInclude: true });
 
     res.json({
       ok: true,
-      submission: USE_POSTGRES ? {
+      submission: mapped || (USE_POSTGRES ? {
         id: updated.submission_id,
         submissionId: updated.submission_id,
         auditionId: updated.audition_id,
@@ -12119,6 +12184,7 @@ app.patch('/api/auditions/:id/submissions/:sid', requireAuth, async (req, res) =
         thumbnailUrl: updated.thumbnail_url,
         votesCount: updated.votes_count || 0,
         rankLabel: updated.rank_label || '',
+        approvalStatus: updated.approval_status || 'pending',
         createdAt: updated.created_at,
       } : {
         id: updated.submissionId,
@@ -12131,8 +12197,9 @@ app.patch('/api/auditions/:id/submissions/:sid', requireAuth, async (req, res) =
         thumbnailUrl: updated.thumbnailUrl,
         votesCount: updated.votesCount || 0,
         rankLabel: updated.rankLabel || '',
+        approvalStatus: updated.approvalStatus || 'pending',
         createdAt: updated.createdAt,
-      }
+      })
     });
   } catch (err) {
     logger.error('Error updating submission:', err);
@@ -12178,6 +12245,19 @@ app.post('/api/auditions/:id/submissions/:sid/vote', async (req, res) => {
     }
     
     const voterId = USE_POSTGRES ? session.member_id : session.memberId;
+
+    const submissionRow = await db.get(
+      USE_POSTGRES
+        ? 'SELECT submission_id, approval_status FROM audition_submissions WHERE submission_id = $1'
+        : 'SELECT submissionId, approvalStatus FROM audition_submissions WHERE submissionId = ?',
+      [submissionId]
+    );
+    if (!submissionRow) {
+      return res.status(404).json({ error: 'Submission not found' });
+    }
+    if (getSubmissionApprovalStatus(submissionRow) !== 'approved') {
+      return res.status(403).json({ error: '승인된 참가작만 투표할 수 있습니다.' });
+    }
     
     // Check if already voted
     const existing = await db.get(
@@ -18692,7 +18772,66 @@ async function startServer() {
     await initDatabase();
     await repairRatingData();
     await syncPointLedgerSeq(); // 모든 마이그레이션 완료 후 최종 시퀀스 보정
-    app.listen(PORT, '0.0.0.0', () => {
+    const httpServer = http.createServer(app);
+
+    // ── WebRTC 시그널링 (Socket.io) ──────────────────────────────────
+    const io = new SocketIOServer(httpServer, {
+      cors: { origin: '*', methods: ['GET', 'POST'] },
+    });
+
+    let broadcasterId = null; // 현재 방송 중인 소켓 ID
+
+    io.on('connection', (socket) => {
+      logger.info(`[Socket.io] connected: ${socket.id}`);
+
+      // 관리자가 방송 시작 알림
+      socket.on('broadcaster', () => {
+        broadcasterId = socket.id;
+        socket.broadcast.emit('broadcaster-ready');
+        logger.info('[Socket.io] broadcaster registered:', socket.id);
+      });
+
+      // 시청자가 방송 요청
+      socket.on('watcher', () => {
+        if (broadcasterId) {
+          io.to(broadcasterId).emit('watcher', socket.id);
+        }
+      });
+
+      // offer: broadcaster → watcher
+      socket.on('offer', (watcherId, description) => {
+        io.to(watcherId).emit('offer', socket.id, description);
+      });
+
+      // answer: watcher → broadcaster
+      socket.on('answer', (broadcasterId, description) => {
+        io.to(broadcasterId).emit('answer', socket.id, description);
+      });
+
+      // ICE candidate 교환
+      socket.on('candidate', (targetId, candidate) => {
+        io.to(targetId).emit('candidate', socket.id, candidate);
+      });
+
+      // 방송 종료
+      socket.on('stop-broadcast', () => {
+        broadcasterId = null;
+        socket.broadcast.emit('broadcast-ended');
+        logger.info('[Socket.io] broadcast stopped');
+      });
+
+      socket.on('disconnect', () => {
+        if (socket.id === broadcasterId) {
+          broadcasterId = null;
+          socket.broadcast.emit('broadcast-ended');
+        }
+        io.emit('disconnectPeer', socket.id);
+        logger.info(`[Socket.io] disconnected: ${socket.id}`);
+      });
+    });
+    // ─────────────────────────────────────────────────────────────────
+
+    httpServer.listen(PORT, '0.0.0.0', () => {
       logger.info(`Server listening on http://0.0.0.0:${PORT}`);
     });
   } catch (err) {

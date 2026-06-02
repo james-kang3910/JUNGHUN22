@@ -99,7 +99,7 @@ const MENU_ITEMS = [
   { path: "/admin/auditions", label: "오디션", icon: "🎤" },
   { path: "/admin/members", label: "회원관리", icon: "👥" },
   { path: "/admin/live-broadcast", label: "라이브방송", icon: "📡" },
-  { path: "/admin/distribution", label: "유통지원", icon: "📦" },
+  { path: "/admin/distribution", label: "유통지원 관리", icon: "📦" },
   { path: "/admin/supply-managers", label: "보급담당자", icon: "📋" },
   { path: "/admin/supply-tools", label: "보급도구", icon: "⚙️" },
   { path: "/admin/backup-tools", label: "백업·임포트", icon: "💾" },

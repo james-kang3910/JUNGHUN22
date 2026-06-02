@@ -356,7 +356,10 @@ export default function AdminDashboard() {
     { icon: "📰", title: "콘텐츠", desc: "공지사항·공유방송", path: "/admin/contents", color: "#ec4899", statKey: "notices", statLabel: "공개" },
     { icon: "🎤", title: "오디션", desc: "오디션 등록/관리", path: "/admin/auditions", color: "#f59e0b", statKey: "auditions", statLabel: "진행" },
     { icon: "👥", title: "회원 관리", desc: "회원 상태/권한 관리", path: "/admin/members", color: "#06b6d4", statKey: "users", statLabel: "활성" },
-    { icon: "💎", title: "포인트 관리", desc: "포인트 지급/차감/원장", path: "/admin/points", color: "#eab308", statKey: "points", statLabel: "원장" },    { icon: "🎫", title: "상품권 관리", desc: "VIP 상품권 지급/기록", path: "/admin/vouchers", color: "#f472b6", statKey: "vouchers", statLabel: "지급" },    { icon: "📦", title: "보급지원담당자", desc: "보급지원 담당자 관리/바로가기", path: "/admin/supply-managers", color: "#ef4444", statKey: "supplyManagers", statLabel: "담당자" },
+    { icon: "🚚", title: "유통지원 관리", desc: "유통 상품·주문·출금 관리", path: "/admin/distribution", color: "#0ea5e9", statKey: "distribution", statLabel: "상품" },
+    { icon: "💎", title: "포인트 관리", desc: "포인트 지급/차감/원장", path: "/admin/points", color: "#eab308", statKey: "points", statLabel: "원장" },
+    { icon: "🎫", title: "상품권 관리", desc: "VIP 상품권 지급/기록", path: "/admin/vouchers", color: "#f472b6", statKey: "vouchers", statLabel: "지급" },
+    { icon: "📦", title: "보급지원담당자", desc: "보급지원 담당자 관리/바로가기", path: "/admin/supply-managers", color: "#ef4444", statKey: "supplyManagers", statLabel: "담당자" },
     { icon: "🎁", title: "보급지원 목록", desc: "요청/제안 관리", path: "/admin/supplies", color: "#f97316", statKey: "supplies", statLabel: "등록" },
     { icon: "🔧", title: "보급지원 도구", desc: "백업/복원/정리", path: "/admin/supply-tools", color: "#84cc16", statKey: null, statLabel: null },
   ];
@@ -378,6 +381,8 @@ export default function AdminDashboard() {
 
   // ★ supply count for quick stat box (서버 기반)
   const [supplyCount, setSupplyCount] = useState(0);
+  const [distributionProductCount, setDistributionProductCount] = useState(0);
+  const [distributionPendingOrders, setDistributionPendingOrders] = useState(0);
   useEffect(() => {
     async function loadSupplyCount() {
       try {
@@ -391,10 +396,38 @@ export default function AdminDashboard() {
     loadSupplyCount();
   }, []);
 
+  useEffect(() => {
+    async function loadDistributionStats() {
+      try {
+        const [supplies, orders] = await Promise.all([
+          storageAdapter.fetchSupplies().catch(() => []),
+          storageAdapter.getSupplyRequests({ requestType: 'distribution' }).catch(() => []),
+        ]);
+        const products = (Array.isArray(supplies) ? supplies : []).filter((item) => {
+          const status = String(item?.status || '').toLowerCase();
+          if (status === 'deleted') return false;
+          const type = String(item?.type || item?.category || '').toLowerCase();
+          if (type === 'request') return false;
+          return item?.price != null || item?.uploadMeta || item?.upload_meta;
+        });
+        const pending = (Array.isArray(orders) ? orders : []).filter((order) =>
+          ['ORDERED', 'ADMIN_CONFIRMED', 'IN_DELIVERY'].includes(String(order?.orderStatus || '').toUpperCase())
+        );
+        setDistributionProductCount(products.length);
+        setDistributionPendingOrders(pending.length);
+      } catch (e) {
+        console.warn('[AdminDashboard] Failed to load distribution stats:', e);
+        setDistributionProductCount(0);
+        setDistributionPendingOrders(0);
+      }
+    }
+    loadDistributionStats();
+  }, []);
+
   // 통계값 가져오기 헬퍼
   const getStatValue = (menu) => {
     if (!menu.statKey) return null;
-    if (!stats && menu.statKey !== "supplyManagers" && menu.statKey !== "supplies") return null;
+    if (!stats && !["supplyManagers", "supplies", "distribution"].includes(menu.statKey)) return null;
     const stat = stats?.[menu.statKey];
     
     if (menu.statKey === "regions") return stat?.public || 0;
@@ -407,6 +440,7 @@ export default function AdminDashboard() {
     if (menu.statKey === "vouchers") return stat?.issued || 0;
     if (menu.statKey === "supplyManagers") return supplyManagerCount;
     if (menu.statKey === "supplies") return supplyCount;
+    if (menu.statKey === "distribution") return distributionProductCount;
     return null;
   };
 
@@ -423,8 +457,8 @@ export default function AdminDashboard() {
         </div>
       </div>
 
-      {/* ★ 라이브 방송 버튼 (pv2 패턴) */}
-      <div style={{ marginBottom: 24, textAlign: "center" }}>
+      {/* ★ 라이브 방송 / 유통지원 관리 바로가기 */}
+      <div style={{ marginBottom: 24, display: 'flex', gap: 12, justifyContent: 'center', flexWrap: 'wrap' }}>
         <button
           style={{
             padding: "12px 24px",
@@ -439,6 +473,21 @@ export default function AdminDashboard() {
           onClick={() => navigate("/admin/live-broadcast")}
         >
           📡 라이브 방송 시작
+        </button>
+        <button
+          style={{
+            padding: "12px 24px",
+            borderRadius: 8,
+            background: "linear-gradient(135deg,#0284c7,#0ea5e9)",
+            color: "#fff",
+            fontWeight: 700,
+            fontSize: 16,
+            border: "none",
+            cursor: "pointer",
+          }}
+          onClick={() => navigate("/admin/distribution")}
+        >
+          📦 유통지원 관리{distributionPendingOrders > 0 ? ` (${distributionPendingOrders}건 대기)` : ''}
         </button>
       </div>
 

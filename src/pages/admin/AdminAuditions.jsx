@@ -8,6 +8,7 @@ import AdminModalForm from "./components/AdminModalForm";
 import ConfirmDialog from "./components/ConfirmDialog";
 import Toast from "./components/Toast";
 import { getAuditionDateFloorInput, isAuditionClosed, normalizeAuditionRankLabel, validateAuditionDateRange } from "../../lib/auditionSchedule";
+import AuditionVideoModal from "../../components/AuditionVideoModal";
 
 function getSelectionStatus(item) {
   if (!isAuditionClosed(item)) return null;
@@ -69,6 +70,7 @@ export default function AdminAuditions() {
   const [subRankDrafts, setSubRankDrafts] = useState({});
   const [subDeleteId, setSubDeleteId] = useState(null);
   const [subConfirmOpen, setSubConfirmOpen] = useState(false);
+  const [previewVideo, setPreviewVideo] = useState(null);
 
   // 구/군 목록 (현재 선택된 regionId 기반)
   const [districts, setDistricts] = useState([]);
@@ -278,6 +280,62 @@ export default function AdminAuditions() {
     } catch (err) {
       setToast({ open: true, message: `등수 저장 실패: ${err.message}`, type: 'error' });
     }
+  };
+
+  const handleApprovalChange = async (sub, approvalStatus) => {
+    const auditionId = sub.auditionId || sub.audition_id || subsAudition?.id;
+    const submissionId = sub.id || sub.submissionId || sub.submission_id;
+    if (!auditionId || !submissionId) {
+      setToast({ open: true, message: '승인 처리 실패: 참가작 정보가 올바르지 않습니다.', type: 'error' });
+      return;
+    }
+    const label = approvalStatus === 'approved' ? '승인(공개)' : approvalStatus === 'rejected' ? '거절' : '대기';
+    if (!window.confirm(`이 참가작을 "${label}" 처리하시겠습니까?`)) return;
+    try {
+      const result = await storageAdapter.updateAuditionSubmission(auditionId, submissionId, { approvalStatus });
+      const updated = result?.submission || { approvalStatus };
+      setSubs((prev) => prev.map((item) => (item.id === sub.id || item.submissionId === submissionId)
+        ? { ...item, ...updated, approvalStatus: updated.approvalStatus || approvalStatus }
+        : item));
+      setToast({
+        open: true,
+        message: approvalStatus === 'approved' ? '영상이 공개되었습니다.' : approvalStatus === 'rejected' ? '참가작이 거절되었습니다.' : '승인 대기 상태로 변경되었습니다.',
+        type: 'success',
+      });
+    } catch (err) {
+      setToast({ open: true, message: `승인 처리 실패: ${err.message}`, type: 'error' });
+    }
+  };
+
+  const getApprovalMeta = (status) => {
+    const normalized = String(status || 'pending').toLowerCase();
+    if (normalized === 'approved') return { label: '공개', color: '#22c55e' };
+    if (normalized === 'rejected') return { label: '거절', color: '#ef4444' };
+    return { label: '승인대기', color: '#f59e0b' };
+  };
+
+  const buildPreviewVideo = (sub) => {
+    const mediaUrl = sub.mediaUrl || sub.media_url || '';
+    if (!mediaUrl) return null;
+    return {
+      id: sub.id || sub.submissionId || sub.submission_id,
+      auditionId: sub.auditionId || sub.audition_id || subsAudition?.id,
+      name: sub.title || sub.memberName || '참가자',
+      type: sub.mediaType || sub.media_type || 'video',
+      mediaUrl,
+      thumbnail: sub.thumbnailUrl || sub.thumbnail_url || null,
+      approvalStatus: sub.approvalStatus || sub.approval_status || 'pending',
+      auditionClosed: subsAudition ? isAuditionClosed(subsAudition) : false,
+    };
+  };
+
+  const openSubPreview = (sub) => {
+    const video = buildPreviewVideo(sub);
+    if (!video) {
+      setToast({ open: true, message: '미리볼 영상 URL이 없습니다.', type: 'error' });
+      return;
+    }
+    setPreviewVideo(video);
   };
 
   // 참가작 삭제 확인 열기
@@ -519,7 +577,7 @@ export default function AdminAuditions() {
                 <div style={{ fontSize: 12, opacity: 0.6, marginTop: 2 }}>{subsAudition.title} · {subs.length}건</div>
               </div>
               <button
-                onClick={() => { setSubsAudition(null); setEditingSubId(null); }}
+                onClick={() => { setSubsAudition(null); setEditingSubId(null); setPreviewVideo(null); }}
                 style={{ background: 'none', border: 'none', color: '#fff', fontSize: 22, cursor: 'pointer', lineHeight: 1, padding: '0 4px' }}
               >×</button>
             </div>
@@ -534,18 +592,47 @@ export default function AdminAuditions() {
             {!subsLoading && subs.map((sub, idx) => {
               const closed = isAuditionClosed(subsAudition);
               const rankDraft = subRankDrafts[sub.id] ?? normalizeAuditionRankLabel(sub.rankLabel);
+              const approvalMeta = getApprovalMeta(sub.approvalStatus);
+              const hasPreview = !!(sub.mediaUrl || sub.media_url);
+              const thumbBoxStyle = {
+                position: 'relative',
+                width: 72,
+                height: 48,
+                flexShrink: 0,
+                borderRadius: 6,
+                overflow: 'hidden',
+                cursor: hasPreview ? 'pointer' : 'default',
+                border: hasPreview ? '1px solid rgba(255,255,255,0.12)' : 'none',
+              };
               return (
               <div key={sub.id} style={{ padding: '14px 20px', borderBottom: '1px solid rgba(255,255,255,0.06)' }}>
                 <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
                   {sub.thumbnailUrl ? (
-                    <div style={{ position: 'relative', width: 72, height: 48, flexShrink: 0 }}>
-                      <img src={sub.thumbnailUrl} alt="thumb" style={{ width: 72, height: 48, objectFit: 'cover', borderRadius: 6, flexShrink: 0 }} />
+                    <div
+                      role={hasPreview ? 'button' : undefined}
+                      tabIndex={hasPreview ? 0 : undefined}
+                      onClick={() => hasPreview && openSubPreview(sub)}
+                      onKeyDown={(e) => { if (hasPreview && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openSubPreview(sub); } }}
+                      title={hasPreview ? '영상 미리보기' : undefined}
+                      style={thumbBoxStyle}
+                    >
+                      <img src={sub.thumbnailUrl} alt="thumb" style={{ width: 72, height: 48, objectFit: 'cover', display: 'block' }} />
+                      {hasPreview && (
+                        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.35)', color: '#fff', fontSize: 18 }}>▶</div>
+                      )}
                       {normalizeAuditionRankLabel(sub.rankLabel) ? <div style={{ position: 'absolute', top: 4, left: 4, maxWidth: 60, padding: '2px 6px', borderRadius: 999, background: 'linear-gradient(135deg,#fff5cc,#f5c451)', color: '#3d2b00', fontSize: 10, fontWeight: 900, boxShadow: '0 2px 8px rgba(0,0,0,0.25)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub.rankLabel}</div> : null}
                     </div>
                   ) : (
-                    <div style={{ width: 72, height: 48, background: 'rgba(255,255,255,0.06)', borderRadius: 6, flexShrink: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20, position: 'relative' }}>
+                    <div
+                      role={hasPreview ? 'button' : undefined}
+                      tabIndex={hasPreview ? 0 : undefined}
+                      onClick={() => hasPreview && openSubPreview(sub)}
+                      onKeyDown={(e) => { if (hasPreview && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); openSubPreview(sub); } }}
+                      title={hasPreview ? '영상 미리보기' : undefined}
+                      style={{ ...thumbBoxStyle, background: 'rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 20 }}
+                    >
+                      {hasPreview ? '▶' : '🎬'}
                       {normalizeAuditionRankLabel(sub.rankLabel) ? <div style={{ position: 'absolute', top: 4, left: 4, maxWidth: 60, padding: '2px 6px', borderRadius: 999, background: 'linear-gradient(135deg,#fff5cc,#f5c451)', color: '#3d2b00', fontSize: 10, fontWeight: 900, boxShadow: '0 2px 8px rgba(0,0,0,0.25)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub.rankLabel}</div> : null}
-                      🎬
                     </div>
                   )}
                   <div style={{ flex: 1, minWidth: 0 }}>
@@ -566,6 +653,14 @@ export default function AdminAuditions() {
                         {idx + 1}. {sub.title || '(제목 없음)'}
                       </div>
                     )}
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 6, flexWrap: 'wrap' }}>
+                      <span style={{ display: 'inline-flex', alignItems: 'center', minHeight: 22, padding: '2px 8px', borderRadius: 999, background: `${approvalMeta.color}22`, color: approvalMeta.color, fontSize: 11, fontWeight: 800 }}>
+                        {approvalMeta.label}
+                      </span>
+                      {sub.approvalStatus !== 'approved' && (
+                        <span style={{ fontSize: 11, opacity: 0.55 }}>🔒 관리자 승인 전 비공개</span>
+                      )}
+                    </div>
                     <div style={{ fontSize: 12, opacity: 0.6 }}>
                       👤 {sub.memberName || sub.memberId} &nbsp;❤️ {sub.votesCount || 0}표
                     </div>
@@ -581,11 +676,38 @@ export default function AdminAuditions() {
                       <button disabled={!closed} onClick={() => handleSaveSubRank(sub, '')} style={{ padding: '4px 10px', borderRadius: 4, border: 'none', background: closed ? 'rgba(239,68,68,0.8)' : 'rgba(107,114,128,0.6)', color: '#fff', fontSize: 11, cursor: closed ? 'pointer' : 'not-allowed' }}>뱃지 제거</button>
                     </div>
                     {!closed && <div style={{ fontSize: 11, opacity: 0.5, marginTop: 6 }}>오디션 종료 후 심사 등수를 지정할 수 있습니다.</div>}
+                    {hasPreview && (
+                      <button
+                        type="button"
+                        onClick={() => openSubPreview(sub)}
+                        style={{ marginTop: 8, padding: '5px 10px', borderRadius: 6, border: '1px solid rgba(96,165,250,0.35)', background: 'rgba(59,130,246,0.15)', color: '#93c5fd', fontSize: 11, fontWeight: 700, cursor: 'pointer' }}
+                      >
+                        ▶ 영상 미리보기
+                      </button>
+                    )}
                     {sub.mediaUrl && (
                       <div style={{ fontSize: 11, opacity: 0.35, marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{sub.mediaUrl}</div>
                     )}
                   </div>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }}>
+                    {sub.approvalStatus !== 'approved' && (
+                      <button
+                        onClick={() => handleApprovalChange(sub, 'approved')}
+                        style={{ padding: '4px 10px', borderRadius: 4, border: 'none', background: 'rgba(34,197,94,0.85)', color: '#fff', fontSize: 11, cursor: 'pointer' }}
+                      >✅ 승인</button>
+                    )}
+                    {sub.approvalStatus === 'approved' && (
+                      <button
+                        onClick={() => handleApprovalChange(sub, 'pending')}
+                        style={{ padding: '4px 10px', borderRadius: 4, border: 'none', background: 'rgba(245,158,11,0.85)', color: '#fff', fontSize: 11, cursor: 'pointer' }}
+                      >🔒 비공개</button>
+                    )}
+                    {sub.approvalStatus !== 'rejected' && (
+                      <button
+                        onClick={() => handleApprovalChange(sub, 'rejected')}
+                        style={{ padding: '4px 10px', borderRadius: 4, border: 'none', background: 'rgba(239,68,68,0.75)', color: '#fff', fontSize: 11, cursor: 'pointer' }}
+                      >⛔ 거절</button>
+                    )}
                     <button
                       onClick={() => { setEditingSubId(sub.id); setEditSubTitle(sub.title || ''); }}
                       style={{ padding: '4px 10px', borderRadius: 4, border: 'none', background: 'rgba(168,85,247,0.7)', color: '#fff', fontSize: 11, cursor: 'pointer' }}
@@ -600,6 +722,14 @@ export default function AdminAuditions() {
             )})}
           </div>
         </div>
+      )}
+
+      {previewVideo && (
+        <AuditionVideoModal
+          video={previewVideo}
+          previewMode
+          onClose={() => setPreviewVideo(null)}
+        />
       )}
 
       {/* 참가작 삭제 확인 */}

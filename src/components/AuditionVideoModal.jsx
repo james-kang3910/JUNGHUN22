@@ -6,7 +6,7 @@ import { getCurrentUser, getSession, isLoggedIn as isAuthLoggedIn } from "../lib
 import { canAccessRegionalConsole } from "../lib/permissions";
 import * as storageAdapter from "../lib/storageAdapter";
 
-export default function AuditionVideoModal({ video, onClose, onVote }) {
+export default function AuditionVideoModal({ video, onClose, onVote, previewMode = false }) {
   const [voting, setVoting] = useState(false);
   const [voted, setVoted] = useState(false);
   const [toast, setToast] = useState(null);
@@ -53,8 +53,8 @@ export default function AuditionVideoModal({ video, onClose, onVote }) {
     setEditingCommentId(null);
     setEditingDraft('');
     setExpandedComments(false);
-    loadComments();
-  }, [video?.auditionId, video?.id]);
+    if (!previewMode) loadComments();
+  }, [video?.auditionId, video?.id, previewMode]);
 
   const handleCommentSubmit = async () => {
     const content = String(commentDraft || '').trim();
@@ -194,6 +194,13 @@ export default function AuditionVideoModal({ video, onClose, onVote }) {
   }
 
   const visibleComments = expandedComments ? comments : comments.slice(0, 5);
+  const approvalLabel = (() => {
+    const status = String(video?.approvalStatus || '').toLowerCase();
+    if (status === 'approved') return { text: '공개', color: '#22c55e' };
+    if (status === 'rejected') return { text: '거절', color: '#ef4444' };
+    if (status === 'pending') return { text: '승인대기', color: '#f59e0b' };
+    return null;
+  })();
 
   return (
     <div
@@ -230,9 +237,16 @@ export default function AuditionVideoModal({ video, onClose, onVote }) {
             borderBottom: "1px solid rgba(255,255,255,0.1)",
           }}
         >
-          <h3 style={{ margin: 0, fontSize: "18px", fontWeight: "700", color: "#fff" }}>
-            {video.name || "참가자"}
-          </h3>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0 }}>
+            <h3 style={{ margin: 0, fontSize: "18px", fontWeight: "700", color: "#fff", overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+              {video.name || "참가자"}
+            </h3>
+            {previewMode && approvalLabel ? (
+              <span style={{ flexShrink: 0, padding: '3px 8px', borderRadius: 999, background: `${approvalLabel.color}22`, color: approvalLabel.color, fontSize: 11, fontWeight: 800 }}>
+                {approvalLabel.text}
+              </span>
+            ) : null}
+          </div>
           <button
             onClick={onClose}
             style={{
@@ -268,6 +282,7 @@ export default function AuditionVideoModal({ video, onClose, onVote }) {
         )}
 
         {/* ✨ ADD: 푸터 (투표 버튼 추가) */}
+        {!previewMode && (
         <div
           style={{
             padding: "12px 20px",
@@ -308,7 +323,15 @@ export default function AuditionVideoModal({ video, onClose, onVote }) {
             {isClosedAudition ? "종료된 오디션" : voting ? "투표중..." : voted ? "✓ 투표완료" : "❤️ 투표하기"}
           </button>
         </div>
+        )}
 
+        {previewMode && (
+          <div style={{ padding: '12px 20px', borderTop: '1px solid rgba(255,255,255,0.08)', background: '#141414', fontSize: 12, color: '#9ca3af' }}>
+            관리자 미리보기 · 승인 전 영상은 일반 사용자에게 비공개됩니다.
+          </div>
+        )}
+
+        {!previewMode && (
         <div
           style={{
             padding: "18px 20px 20px",
@@ -453,6 +476,7 @@ export default function AuditionVideoModal({ video, onClose, onVote }) {
             </div>
           ) : null}
         </div>
+        )}
       </div>
     </div>
   );

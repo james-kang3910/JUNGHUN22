@@ -292,7 +292,7 @@ export default function AuditionDetail() {
       const result = await storageAdapter.createAuditionSubmission(id, payload);
       console.log('[AuditionDetail] Submission created:', result);
       
-      window.alert("지원이 접수되었습니다!");
+      window.alert("지원이 접수되었습니다. 관리자 승인 후 영상이 공개됩니다.");
       setShowForm(false);
       setForm({ name: "", phone: "", region: "", intro: "", link: "", linkKind: null, portfolio: "", uploadFile: null, uploadedVideoUrl: "", consent: false });
       setPreviewUrl(null);
@@ -376,7 +376,6 @@ export default function AuditionDetail() {
   // ✅ UPDATE: allVideos는 서버 데이터 기반
   const allVideos = useMemo(() => {
     if (!submissions) return []; // 로딩중이면 빈 배열
-    // ✅ UPDATE: submission을 video 포맷으로 변환
     const normalized = submissions.map(s => ({
       id: s.submissionId || s.submission_id || s.id,
       auditionId: s.auditionId || s.audition_id || id,
@@ -387,16 +386,32 @@ export default function AuditionDetail() {
       rankLabel: s.rankLabel || s.rank_label || s.badgeLabel || s.badge_label || s.resultLabel || s.result_label || '',
       voted: s.voted || s.voted_by_current_user || s.user_voted || false,
       votesCount: s.votesCount || s.votes_count || 0,
+      approvalStatus: String(s.approvalStatus || (s.locked ? 'pending' : 'pending')).toLowerCase(),
+      locked: !!s.locked,
       createdAt: s.createdAt || s.created_at,
       auditionClosed,
     }));
-    console.log('[AuditionDetail] render allVideos', normalized.map((item) => ({
+    const publicVideos = normalized.filter(
+      (item) => item.approvalStatus === 'approved' && item.mediaUrl && !item.locked
+    );
+    console.log('[AuditionDetail] render allVideos', publicVideos.map((item) => ({
       id: item.id,
       name: item.name,
       rankLabel: item.rankLabel,
+      approvalStatus: item.approvalStatus,
     })));
-    return sortAuditionSubmissions(normalized, auditionClosed);
+    return sortAuditionSubmissions(publicVideos, auditionClosed);
   }, [submissions, id, auditionClosed]);
+
+  const myPendingSubmission = useMemo(() => {
+    if (!submissions) return null;
+    const me = getCurrentUser();
+    if (!me?.memberId) return null;
+    return submissions.find((s) =>
+      String(s.memberId || s.member_id || '') === String(me.memberId) &&
+      String(s.approvalStatus || 'pending').toLowerCase() === 'pending'
+    ) || null;
+  }, [submissions]);
 
   const top3Videos = useMemo(() => {
     return allVideos.slice(0, 3);
@@ -466,6 +481,20 @@ export default function AuditionDetail() {
       )}
 
       {/* ── 오디션 히어로 헤더 ── */}
+      {myPendingSubmission && (
+        <div style={{
+          margin: '10px 10px 0',
+          padding: '12px 14px',
+          borderRadius: 12,
+          background: 'rgba(245,158,11,0.12)',
+          border: '1px solid rgba(245,158,11,0.35)',
+          color: '#fde68a',
+          fontSize: 13,
+          fontWeight: 700,
+        }}>
+          🔒 제출하신 참가 영상은 관리자 승인 대기 중입니다. 승인 후 다른 사용자에게 공개됩니다.
+        </div>
+      )}
       <div style={{
         background: 'linear-gradient(158deg, #08121c 0%, #0d1e2d 55%, #06101a 100%)',
         position: 'relative',

@@ -1863,6 +1863,30 @@ export async function requestDistWithdraw({ amount, bankName, accountNumber, dep
   }
 }
 
+/** 관리자: 유통지원 판매자 출금 요청 목록 */
+export async function getAdminDistPayouts() {
+  try {
+    const result = await apiGet('/api/admin/dist-payouts', { headers: _adminAuthHeader() });
+    if (Array.isArray(result?.payouts)) return result.payouts;
+    return unwrapListNew(result, ['payouts', 'data']);
+  } catch (error) {
+    console.error('[getAdminDistPayouts] Error:', error.message);
+    throw error;
+  }
+}
+
+/** 관리자: 유통지원 출금 요청 처리 */
+export async function updateAdminDistPayout(payoutId, updates = {}) {
+  try {
+    return await apiPatch(`/api/admin/dist-payouts/${encodeURIComponent(payoutId)}`, updates, {
+      headers: _adminAuthHeader(),
+    });
+  } catch (error) {
+    console.error('[updateAdminDistPayout] Error:', error.message);
+    throw error;
+  }
+}
+
 //------------------------------------------------------------------------------
 // Posts API
 //------------------------------------------------------------------------------
@@ -2636,10 +2660,10 @@ export async function getBroadcasts(params = {}) {
 
 export async function getAuditionSubmissions(auditionId) {
   const url = `${API_BASE}/api/auditions/${auditionId}/submissions`;
-  
+
   try {
     logDetailedRequest('GET', url);
-    const res = await fetch(url, { credentials: 'include' });
+    const res = await fetch(url, { credentials: 'include', headers: _sessionAuthHeader() });
     const data = await res.json();
     logDetailedResponse('GET', url, res, data);
     if (!res.ok) throw new Error(`Failed to fetch submissions: ${res.status}`);
