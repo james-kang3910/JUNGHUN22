@@ -5,6 +5,7 @@ import { getSession } from '../lib/authStore';
 import * as storageAdapter from '../lib/storageAdapter';
 import { filterMembersByExactSearchQuery, hasDuplicateExactNameMatches, normalizeExactName } from '../lib/memberSearchUtils';
 import MemberSearchResultLabel from '../components/MemberSearchResultLabel';
+import SiteConfirmModal from '../components/SiteConfirmModal';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 const MAX_ROOMS_PER_CREATOR = 3;
@@ -59,6 +60,7 @@ export default function RegionChatRooms() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [leavingRoom, setLeavingRoom] = useState(false);
+  const [leaveConfirmOpen, setLeaveConfirmOpen] = useState(false);
   const [invitePanelOpen, setInvitePanelOpen] = useState(false);
   const [inviteQuery, setInviteQuery] = useState('');
   const [inviteTargetIds, setInviteTargetIds] = useState([]);
@@ -536,10 +538,14 @@ export default function RegionChatRooms() {
     }
   }
 
-  async function handleLeaveRoom() {
+  function openLeaveRoomConfirm() {
+    if (!selectedRoomId || leavingRoom) return;
+    setLeaveConfirmOpen(true);
+  }
+
+  async function confirmLeaveRoom() {
     if (!selectedRoomId) return;
-    const confirmed = window.confirm('채팅방에서 나가시겠습니까?');
-    if (!confirmed) return;
+    setLeaveConfirmOpen(false);
     setLeavingRoom(true);
     try {
       await fetchJson(`/api/chat-rooms/${encodeURIComponent(selectedRoomId)}/leave`, { method: 'DELETE' });
@@ -993,7 +999,7 @@ export default function RegionChatRooms() {
                 ) : null}
                 <button
                   type="button"
-                  onClick={handleLeaveRoom}
+                  onClick={openLeaveRoomConfirm}
                   disabled={leavingRoom}
                   style={{ border: '1px solid #fecaca', background: '#fef2f2', color: '#b91c1c', borderRadius: 999, padding: '5px 10px', fontSize: 11, fontWeight: 800, cursor: 'pointer' }}
                 >
@@ -1233,6 +1239,18 @@ export default function RegionChatRooms() {
           {chatToast}
         </div>
       ) : null}
+
+      <SiteConfirmModal
+        open={leaveConfirmOpen}
+        title="채팅방 나가기"
+        message="이 채팅방에서 나가시겠습니까?"
+        details={selectedRoom?.name ? [`방 이름: ${selectedRoom.name}`, '나가면 대화 목록에서 이 방이 사라집니다.'] : ['나가면 대화 목록에서 이 방이 사라집니다.']}
+        confirmText="나가기"
+        cancelText="취소"
+        tone="teal"
+        onConfirm={confirmLeaveRoom}
+        onCancel={() => setLeaveConfirmOpen(false)}
+      />
     </div>
   );
 }
