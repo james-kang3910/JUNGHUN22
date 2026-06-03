@@ -1,11 +1,18 @@
 // 친구 관리 서비스 (서버 API 연동)
-// Default backend in this workspace listens on 8787 (server/index.js)
+import { getAuthInfo } from './authStore';
+
 const RAW_API = import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_URL || '';
 const API_BASE = String(RAW_API || '').replace(/\/+$/, '').replace(/\/api$/, '') || (import.meta.env.DEV ? 'http://127.0.0.1:8787' : '');
 
+function sessionHeaders() {
+  const token = getAuthInfo()?.token || '';
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
 export async function getFriends(userId) {
   const res = await fetch(`${API_BASE}/api/friends/${encodeURIComponent(userId)}`, {
-    credentials: 'include'
+    credentials: 'include',
+    headers: { ...sessionHeaders() },
   });
   const data = await res.json().catch(() => (null));
   if (!res.ok) throw new Error((data && data.error) ? data.error : 'Failed to fetch friends');
@@ -13,12 +20,14 @@ export async function getFriends(userId) {
   return Array.isArray(data.friends) ? data.friends : [];
 }
 
-export async function addFriend(userId, friendId) {
+export async function addFriend(userId, friendId, options = {}) {
+  const payload = { userId, friendId };
+  if (options.expectedName) payload.expectedName = String(options.expectedName).trim();
   const res = await fetch(`${API_BASE}/api/friends`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...sessionHeaders() },
     credentials: 'include',
-    body: JSON.stringify({ userId, friendId })
+    body: JSON.stringify(payload),
   });
   const data = await res.json().catch(() => (null));
   if (!res.ok) throw new Error((data && data.error) ? data.error : 'Failed to add friend');
@@ -35,9 +44,9 @@ export async function addFriend(userId, friendId) {
 export async function removeFriend(userId, friendId) {
   const res = await fetch(`${API_BASE}/api/friends`, {
     method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...sessionHeaders() },
     credentials: 'include',
-    body: JSON.stringify({ userId, friendId })
+    body: JSON.stringify({ userId, friendId }),
   });
   const data = await res.json().catch(() => (null));
   if (!res.ok) throw new Error((data && data.error) ? data.error : 'Failed to remove friend');

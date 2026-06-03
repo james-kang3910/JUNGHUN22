@@ -13,6 +13,7 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { isLoggedIn, getSession, getAuthInfo, getCurrentUser, hydrateAuthFromServer, isAuthReady } from "../lib/authStore";
 import { canAccessRegionalConsole } from "../lib/permissions";
 import * as chatService from "../lib/chatService";
+import { filterMembersByExactSearchQuery, normalizeExactName, memberDisplayName } from "../lib/memberSearchUtils";
 import { isPointsTransferEnabled } from "../lib/pointsGuard";
 import { calculateStatus } from "../lib/adminStore";
 import * as shopStore from "../lib/shopStore";
@@ -504,6 +505,7 @@ export default function My() {
     const [friendCount, setFriendCount] = useState(0);
     const [friendModalOpen, setFriendModalOpen] = useState(false);
     const [friendCandidates, setFriendCandidates] = useState([]);
+    const [friendSearchName, setFriendSearchName] = useState('');
     const [chatOpen, setChatOpen] = useState(false);
     const [activeChatFriend, setActiveChatFriend] = useState(null);
   const [chatMessages, setChatMessages] = useState([]);
@@ -816,6 +818,7 @@ export default function My() {
             return true;
           });
           setFriendCandidates(candidates);
+          setFriendSearchName('');
           setFriendModalOpen(true);
         } catch (e) {
           console.error('[My] openFriendModal failed:', e);
@@ -825,6 +828,11 @@ export default function My() {
         }
       })();
     };
+
+    const filteredFriendCandidates = useMemo(
+      () => filterMembersByExactSearchQuery(friendCandidates, friendSearchName),
+      [friendCandidates, friendSearchName]
+    );
 
     const handleAddFriend = (member) => {
       (async () => {
@@ -839,7 +847,16 @@ export default function My() {
             setToast({ open: true, message: '친구 ID가 올바르지 않습니다.', type: 'error' });
             return;
           }
-          await storageAdapter.addFriend(resolvedUserId, friendId);
+          const expectedName = normalizeExactName(friendSearchName);
+          if (!expectedName) {
+            setToast({ open: true, message: '이름을 정확히 입력한 뒤 추가해 주세요.', type: 'error' });
+            return;
+          }
+          if (memberDisplayName(member) !== expectedName) {
+            setToast({ open: true, message: '입력한 이름과 일치하는 회원만 추가할 수 있습니다.', type: 'error' });
+            return;
+          }
+          await storageAdapter.addFriend(resolvedUserId, friendId, { expectedName });
           setFriendCandidates(prev => prev.filter(p => String(p.id ?? p.memberId) !== friendId));
           try { setToast({ open: true, message: `${member?.name || '회원'}님을 친구로 추가했습니다`, type: 'success' }); } catch (e) {}
           window.dispatchEvent(new CustomEvent('su:ssot:changed', { detail: { type: 'friends', operation: 'add' } }));
@@ -6089,8 +6106,20 @@ export default function My() {
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 1200 }}>
           <div className="su-modal su-modal--lg">
             <div className="su-modalHeader">회원 친구 추가</div>
+            <div style={{ marginBottom: 10 }}>
+              <input
+                value={friendSearchName}
+                onChange={(e) => setFriendSearchName(e.target.value)}
+                placeholder="회원 이름을 정확히 입력 (예: 홍길동)"
+                className="su-input"
+                style={{ width: '100%' }}
+              />
+              <div style={{ marginTop: 6, fontSize: 12, color: 'var(--c-tx-s)' }}>
+                유사한 이름은 표시되지 않습니다. 이름이 완전히 일치할 때만 검색됩니다.
+              </div>
+            </div>
             <div style={{ maxHeight: 420, overflowY: 'auto' }}>
-              {friendCandidates.length > 0 ? friendCandidates.map((m) => (
+              {filteredFriendCandidates.length > 0 ? filteredFriendCandidates.map((m) => (
                 <div key={m.id || m.memberId} className="su-listItem" style={{ display: 'flex', justifyContent: 'space-between' }}>
                   <div>
                     <div style={{ fontWeight: 700 }}>{m.name}</div>
@@ -6101,11 +6130,13 @@ export default function My() {
                   </div>
                 </div>
               )) : (
-                <div style={{ color: 'var(--c-tx-s)' }}>추가할 회원이 없습니다</div>
+                <div style={{ color: 'var(--c-tx-s)' }}>
+                  {normalizeExactName(friendSearchName) ? '이름이 정확히 일치하는 회원이 없습니다.' : '이름을 정확히 입력하면 검색됩니다.'}
+                </div>
               )}
             </div>
             <div className="su-modalFooter">
-              <button type="button" onClick={() => setFriendModalOpen(false)} className="su-btnGhost">닫기</button>
+              <button type="button" onClick={() => { setFriendModalOpen(false); setFriendSearchName(''); }} className="su-btnGhost">닫기</button>
             </div>
           </div>
         </div>

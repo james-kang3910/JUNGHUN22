@@ -83,9 +83,8 @@ function normalizeLegacyNoticeId(notice) {
 }
 
 export async function getMembers() {
-  // ✅ apiClient 사용: credentials 자동 포함, 로깅 표준화
   try {
-    const result = await apiGet('/api/members');
+    const result = await apiGet('/api/members', { headers: _sessionAuthHeader() });
     return unwrapListNew(result, ['members', 'data']);
   } catch (error) {
     console.error('[getMembers] Error:', error.message);
@@ -2130,17 +2129,24 @@ export async function fetchConversations(userId) {
 export async function fetchFriends(userId) {
   const res = await fetch(`${API_BASE}/api/friends/${encodeURIComponent(userId)}`, {
     method: 'GET',
+    headers: { ..._sessionAuthHeader() },
+    credentials: 'include',
   });
   const data = await checkStatus(res);
   // 서버 응답: { success, data: { friends: [] } } 또는 { friends: [] } 모두 지원
   return data?.data ?? data;
 }
 
-export async function addFriend(userId, friendId) {
+export async function addFriend(userId, friendId, options = {}) {
+  const payload = { userId, friendId };
+  if (options.expectedName) {
+    payload.expectedName = String(options.expectedName).trim();
+  }
   const res = await fetch(`${API_BASE}/api/friends`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ userId, friendId }),
+    headers: { 'Content-Type': 'application/json', ..._sessionAuthHeader() },
+    credentials: 'include',
+    body: JSON.stringify(payload),
   });
   return checkStatus(res);
 }
@@ -2148,7 +2154,8 @@ export async function addFriend(userId, friendId) {
 export async function removeFriend(userId, friendId) {
   const res = await fetch(`${API_BASE}/api/friends`, {
     method: 'DELETE',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ..._sessionAuthHeader() },
+    credentials: 'include',
     body: JSON.stringify({ userId, friendId }),
   });
   return checkStatus(res);

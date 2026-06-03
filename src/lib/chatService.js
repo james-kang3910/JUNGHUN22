@@ -1,8 +1,14 @@
 // 채팅 서비스 (서버 API 연동)
 // Default backend in this workspace listens on 8787 (server/index.js)
+import { getAuthInfo } from './authStore';
+
 const RAW_API = import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_URL || '';
 const API_BASE = String(RAW_API || '').replace(/\/+$/, '').replace(/\/api$/, '') || (import.meta.env.DEV ? 'http://127.0.0.1:8787' : '');
-import { getAuthInfo } from './authStore';
+
+function sessionHeaders() {
+  const token = getAuthInfo()?.token || '';
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
 
 // last played message id to avoid duplicate plays across events
 let lastPlayedMessageId = null;
@@ -54,8 +60,9 @@ function playSharedSoundForMessage(msg) {
 
 // Get conversation between two users
 export async function getConversation(userId1, userId2) {
-  const res = await fetch(`${API_BASE}/api/messages?memberId=${encodeURIComponent(userId1)}&with=${encodeURIComponent(userId2)}`, {
-    credentials: 'include'
+  const res = await fetch(`${API_BASE}/api/messages?with=${encodeURIComponent(userId2)}`, {
+    credentials: 'include',
+    headers: { ...sessionHeaders() },
   });
   const data = await res.json().catch(() => (null));
   if (!res.ok) {
@@ -71,7 +78,7 @@ export async function getConversation(userId1, userId2) {
 export async function sendMessage(from, to, text) {
   const res = await fetch(`${API_BASE}/api/messages`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...sessionHeaders() },
     credentials: 'include',
     body: JSON.stringify({ fromId: from, toId: to, text })
   });
@@ -98,7 +105,8 @@ export async function sendMessage(from, to, text) {
 // Get recent conversations list
 export async function getConversations(userId) {
   const res = await fetch(`${API_BASE}/api/chats/conversations/${encodeURIComponent(userId)}`, {
-    credentials: 'include'
+    credentials: 'include',
+    headers: { ...sessionHeaders() },
   });
   const data = await res.json().catch(() => (null));
   if (!res.ok) {

@@ -464,6 +464,20 @@ function requireSelfOrAdmin(paramKey = 'id') {
   };
 }
 
+function requireSelfUserIdParam(paramKey = 'userId') {
+  return (req, res, next) => {
+    const targetId = String(req.params[paramKey] || '').trim();
+    if (!targetId) return res.status(400).json({ error: `${paramKey} required` });
+    if (isAdminRole(req.authRole)) return next();
+    if (req.authMemberId && targetId === String(req.authMemberId)) return next();
+    return res.status(403).json({ error: 'Forbidden' });
+  };
+}
+
+function normalizeExactMemberName(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
 function isRegionSuperManagerRole(role) {
   const normalized = String(role || '').toUpperCase();
   return normalized === 'REGION_ADMIN' || normalized === 'REGION_SUPER_MANAGER';
@@ -3466,7 +3480,7 @@ try {
 }
 
 // GET /api/members
-app.get('/api/members', async (req, res) => {
+app.get('/api/members', requireAuth, async (req, res) => {
   try {
     const query = USE_POSTGRES 
       ? 'SELECT member_id, email, name, phone, status, role, supply_manager, distribution_manager, sd_mark, memo, region_id, created_at, updated_at FROM members ORDER BY created_at DESC'
@@ -16690,9 +16704,9 @@ app.delete('/api/schedules/:id', async (req, res) => {
 // ========== Messages (SSOT alias) ==========
 // GET /api/messages?memberId=SU...&with=SU...
 // or use x-member-id header as memberId
-app.get('/api/messages', async (req, res) => {
+app.get('/api/messages', requireAuth, async (req, res) => {
   try {
-    const memberId = String(req.headers['x-member-id'] || req.query.memberId || '').trim();
+    const memberId = String(req.authMemberId || '').trim();
     const withId = String(req.query.with || '').trim();
     if (!memberId) return jsonFail(res, 400, 'memberId required');
     if (!withId) return jsonFail(res, 400, 'with required');
@@ -16727,13 +16741,19 @@ app.get('/api/messages', async (req, res) => {
 });
 
 // POST /api/messages
-app.post('/api/messages', async (req, res) => {
+app.post('/api/messages', requireAuth, async (req, res) => {
   try {
     const { fromId, toId, text } = req.body || {};
+    const senderId = String(req.authMemberId || '').trim();
+    const targetId = String(toId || '').trim();
+    const bodyText = String(text || '').trim();
     
-    if (!fromId) return jsonFail(res, 400, 'fromId required');
-    if (!toId) return jsonFail(res, 400, 'toId required');
-    if (!text) return jsonFail(res, 400, 'text required');
+    if (!senderId) return jsonFail(res, 400, 'fromId required');
+    if (!targetId) return jsonFail(res, 400, 'toId required');
+    if (!bodyText) return jsonFail(res, 400, 'text required');
+    if (fromId && String(fromId) !== senderId) {
+      return jsonFail(res, 403, 'Forbidden: 본인 계정으로만 메시지를 보낼 수 있습니다.');
+    }
 
     const chatId = 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
     const now = new Date().toISOString();
@@ -16742,22 +16762,22 @@ app.post('/api/messages', async (req, res) => {
       await db.run(
         `INSERT INTO chats (chat_id, from_user_id, to_user_id, text, created_at)
          VALUES ($1, $2, $3, $4, NOW())`,
-        [chatId, fromId, toId, text]
+        [chatId, senderId, targetId, bodyText]
       );
     } else {
       await db.run(
         `INSERT INTO chats (chatId, fromUserId, toUserId, text, createdAt)
          VALUES (?, ?, ?, ?, ?)`,
-        [chatId, fromId, toId, text, now]
+        [chatId, senderId, targetId, bodyText, now]
       );
     }
 
     logForensicWrite({
       route: '/api/messages',
       method: 'POST',
-      body: { fromId, toId, text },
+      body: { fromId: senderId, toId: targetId, text: bodyText },
       sql: 'INSERT INTO chats(...)',
-      params: [chatId, fromId, toId],
+      params: [chatId, senderId, targetId],
       dbResult: { changes: 1 },
       result: { ok: true, success: true, messageId: chatId },
     });
@@ -16770,11 +16790,16 @@ app.post('/api/messages', async (req, res) => {
 });
 
 // Get conversation between two users
-app.get('/api/chats', async (req, res) => {
+app.get('/api/chats', requireAuth, async (req, res) => {
   try {
-    const { user1, user2 } = req.query;
+    const user1 = String(req.query.user1 || '').trim();
+    const user2 = String(req.query.user2 || '').trim();
     if (!user1 || !user2) {
       return jsonFail(res, 400, 'user1 and user2 are required');
+    }
+    const selfId = String(req.authMemberId || '');
+    if (!isAdminRole(req.authRole) && selfId !== user1 && selfId !== user2) {
+      return jsonFail(res, 403, 'Forbidden');
     }
 
     let messages = [];
@@ -16810,12 +16835,18 @@ app.get('/api/chats', async (req, res) => {
 });
 
 // Send a message
-app.post('/api/chats', async (req, res) => {
+app.post('/api/chats', requireAuth, async (req, res) => {
   try {
     const { from, to, text } = req.body;
+    const senderId = String(req.authMemberId || '').trim();
+    const targetId = String(to || '').trim();
+    const bodyText = String(text || '').trim();
     
-    if (!from || !to || !text) {
+    if (!senderId || !targetId || !bodyText) {
       return jsonFail(res, 400, 'from, to, and text are required');
+    }
+    if (from && String(from) !== senderId) {
+      return jsonFail(res, 403, 'Forbidden: 본인 계정으로만 메시지를 보낼 수 있습니다.');
     }
 
     const chatId = 'm' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -16825,21 +16856,21 @@ app.post('/api/chats', async (req, res) => {
       await db.run(
         `INSERT INTO chats (chat_id, from_user_id, to_user_id, text, created_at)
          VALUES ($1, $2, $3, $4, NOW())`,
-        [chatId, from, to, text]
+        [chatId, senderId, targetId, bodyText]
       );
     } else {
       await db.run(
         `INSERT INTO chats (chatId, fromUserId, toUserId, text, createdAt)
          VALUES (?, ?, ?, ?, ?)`,
-        [chatId, from, to, text, now]
+        [chatId, senderId, targetId, bodyText, now]
       );
     }
 
     const message = {
       id: chatId,
-      from,
-      to,
-      text,
+      from: senderId,
+      to: targetId,
+      text: bodyText,
       createdAt: now
     };
 
@@ -16851,7 +16882,7 @@ app.post('/api/chats', async (req, res) => {
 });
 
 // Get conversations list for a user
-app.get('/api/chats/conversations/:userId', async (req, res) => {
+app.get('/api/chats/conversations/:userId', requireAuth, requireSelfUserIdParam('userId'), async (req, res) => {
   try {
     const { userId } = req.params;
 
@@ -17505,7 +17536,7 @@ app.delete('/api/chat-rooms/:roomId/leave', requireAuth, async (req, res) => {
 // ========== Friends Routes ==========
 
 // Get friends list for a user
-app.get('/api/friends/:userId', async (req, res) => {
+app.get('/api/friends/:userId', requireAuth, requireSelfUserIdParam('userId'), async (req, res) => {
   try {
     const { userId } = req.params;
 
@@ -17532,12 +17563,33 @@ app.get('/api/friends/:userId', async (req, res) => {
 });
 
 // Add a friend
-app.post('/api/friends', async (req, res) => {
+app.post('/api/friends', requireAuth, async (req, res) => {
   try {
-    const { userId, friendId } = req.body;
+    const userId = String(req.body.userId || '').trim();
+    const friendId = String(req.body.friendId || '').trim();
+    const expectedName = normalizeExactMemberName(req.body.expectedName);
     
     if (!userId || !friendId) {
       return jsonFail(res, 400, 'userId and friendId are required');
+    }
+    if (userId !== String(req.authMemberId)) {
+      return jsonFail(res, 403, 'Forbidden: 본인 계정으로만 친구를 추가할 수 있습니다.');
+    }
+    if (userId === friendId) {
+      return jsonFail(res, 400, '자기 자신은 친구로 추가할 수 없습니다.');
+    }
+
+    const friendRow = USE_POSTGRES
+      ? await db.get('SELECT member_id, name, status FROM members WHERE member_id = $1 LIMIT 1', [friendId])
+      : await db.get('SELECT memberId AS member_id, name, status FROM members WHERE memberId = ? LIMIT 1', [friendId]);
+    if (!friendRow || String(friendRow.status || '').toUpperCase() !== 'ACTIVE') {
+      return jsonFail(res, 404, '회원을 찾을 수 없습니다.');
+    }
+    const friendName = normalizeExactMemberName(friendRow.name);
+    if (expectedName) {
+      if (!friendName || friendName !== expectedName) {
+        return jsonFail(res, 400, '입력한 이름과 일치하는 회원만 친구로 추가할 수 있습니다.');
+      }
     }
 
     const now = new Date().toISOString();
@@ -17588,12 +17640,16 @@ app.post('/api/friends', async (req, res) => {
 });
 
 // Remove a friend
-app.delete('/api/friends', async (req, res) => {
+app.delete('/api/friends', requireAuth, async (req, res) => {
   try {
-    const { userId, friendId } = req.body;
+    const userId = String(req.body.userId || '').trim();
+    const friendId = String(req.body.friendId || '').trim();
     
     if (!userId || !friendId) {
       return jsonFail(res, 400, 'userId and friendId are required');
+    }
+    if (userId !== String(req.authMemberId)) {
+      return jsonFail(res, 403, 'Forbidden');
     }
 
     if (USE_POSTGRES) {

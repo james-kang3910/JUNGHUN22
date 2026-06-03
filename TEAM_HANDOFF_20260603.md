@@ -128,8 +128,11 @@ pm2 restart smi
 | **supply PATCH** | 로그인 필수 + 신청자·보급담당·관리자만 상태 변경 |
 | **관리자 UI** | `AdminContents` 배너 드래그·미리보기·공지 팝업 검증 보강 |
 | **env** | `chatService`/`friendService` — `VITE_API_BASE` \|\| `VITE_API_URL` 통일 |
+| **친구·채팅** | 이름 **완전 일치** 검색만 표시 (`memberSearchUtils.js`), 친구/메시지 API 세션 인증 |
 
 **배포 시:** 관리자 화면 API는 `sessionStorage.su_admin_token` (Bearer) 필수. 일반 회원 토큰만으로는 403.
+
+**친구 추가:** 마이오피스·지역 채팅방 모두 이름을 **띄어쓰기까지 정확히** 입력해야 검색·추가됩니다 (유사 이름 미표시).
 
 ---
 

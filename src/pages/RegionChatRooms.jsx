@@ -3,6 +3,7 @@ import { useOutletContext } from 'react-router-dom';
 import { useRegion } from '../context/RegionContext';
 import { getSession } from '../lib/authStore';
 import * as storageAdapter from '../lib/storageAdapter';
+import { filterMembersByExactSearchQuery, normalizeExactName } from '../lib/memberSearchUtils';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 const MAX_ROOMS_PER_CREATOR = 3;
@@ -140,16 +141,10 @@ export default function RegionChatRooms() {
     return strict.length > 0 ? strict : base;
   }, [members, myMemberId, outletCtx.regionCode, regionId, regionName]);
 
-  const filteredInviteCandidates = useMemo(() => {
-    const query = String(memberQuery || '').trim().toLowerCase();
-    if (!query) return [];
-    return inviteCandidates.filter((member) => {
-      const memberId = String(member?.memberId || member?.id || '').trim().toLowerCase();
-      const name = String(member?.name || member?.nickname || '').trim().toLowerCase();
-      const phone = String(member?.phone || member?.phoneNumber || '').trim().toLowerCase();
-      return memberId.includes(query) || name.includes(query) || phone.includes(query);
-    });
-  }, [inviteCandidates, memberQuery]);
+  const filteredInviteCandidates = useMemo(
+    () => filterMembersByExactSearchQuery(inviteCandidates, memberQuery),
+    [inviteCandidates, memberQuery]
+  );
 
   useEffect(() => {
     if (!regionId) return;
@@ -695,16 +690,7 @@ export default function RegionChatRooms() {
 
   const roomInviteCandidates = useMemo(() => {
     if (!selectedRoom || !isRoomOwner) return [];
-    const query = String(inviteQuery || '').trim().toLowerCase();
-    if (!query) return [];
-    return inviteCandidates.filter((member) => {
-      const memberId = String(member?.memberId || member?.member_id || member?.id || '').trim();
-      if (!memberId) return false;
-      const name = String(member?.name || member?.nickname || '').trim().toLowerCase();
-      const phone = String(member?.phone || member?.phoneNumber || '').trim().toLowerCase();
-      const memberIdLower = memberId.toLowerCase();
-      return memberIdLower.includes(query) || name.includes(query) || phone.includes(query);
-    });
+    return filterMembersByExactSearchQuery(inviteCandidates, inviteQuery);
   }, [inviteCandidates, inviteQuery, isRoomOwner, selectedRoom]);
 
   function toggleInviteTarget(memberId) {
@@ -822,7 +808,7 @@ export default function RegionChatRooms() {
                   <input
                     value={memberQuery}
                     onChange={(event) => setMemberQuery(event.target.value)}
-                    placeholder="회원 검색 후 목록 표시 (이름/아이디/전화번호)"
+                    placeholder="회원 이름을 정확히 입력 (예: 홍길동)"
                     style={{
                       width: '100%',
                       marginBottom: 8,
@@ -839,7 +825,7 @@ export default function RegionChatRooms() {
                   <div style={{ maxHeight: 180, overflowY: 'auto', borderRadius: 10, border: '1px solid var(--c-border)', background: '#fff', padding: 8, display: 'grid', gap: 6 }}>
                     {filteredInviteCandidates.length === 0 ? (
                       <div style={{ fontSize: 12, color: '#94a3b8', padding: '4px 6px' }}>
-                        {memberQuery.trim() ? '검색 결과가 없습니다.' : '회원 이름은 검색 시에만 노출됩니다.'}
+                        {normalizeExactName(memberQuery) ? '이름이 정확히 일치하는 회원이 없습니다.' : '이름을 정확히 입력하면 검색됩니다.'}
                       </div>
                     ) : filteredInviteCandidates.map((member) => {
                       const memberId = String(member?.memberId || member?.member_id || member?.id || '');
@@ -1021,12 +1007,12 @@ export default function RegionChatRooms() {
                 <input
                   value={inviteQuery}
                   onChange={(event) => setInviteQuery(event.target.value)}
-                  placeholder="이름/아이디/전화번호 검색"
+                  placeholder="회원 이름을 정확히 입력 (예: 홍길동)"
                   style={{ width: '100%', borderRadius: 10, border: '1px solid #cbd5e1', padding: '9px 10px', fontSize: 12, marginBottom: 8, background: '#fff' }}
                 />
                 <div style={{ maxHeight: 150, overflowY: 'auto', borderRadius: 10, border: '1px solid #dbeafe', background: '#fff', padding: 8, display: 'grid', gap: 6 }}>
                   {roomInviteCandidates.length === 0 ? (
-                    <div style={{ fontSize: 12, color: '#94a3b8' }}>{inviteQuery.trim() ? '검색 결과가 없습니다.' : '검색어를 입력하면 회원 목록이 표시됩니다.'}</div>
+                    <div style={{ fontSize: 12, color: '#94a3b8' }}>{normalizeExactName(inviteQuery) ? '이름이 정확히 일치하는 회원이 없습니다.' : '이름을 정확히 입력하면 검색됩니다.'}</div>
                   ) : roomInviteCandidates.map((member) => {
                     const memberId = String(member?.memberId || member?.member_id || member?.id || '');
                     if (!memberId) return null;
