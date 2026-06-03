@@ -43,7 +43,7 @@ import RegionLayout from "./pages/RegionLayout";
 import AppRootEntry from "./components/AppRootEntry";
 import RegionLegacyRedirect from "./components/RegionLegacyRedirect";
 import RegionSlugGate from "./components/RegionSlugGate";
-import { regionPortalChildRoutes } from "./routes/regionPortalChildren";
+import { regionPortalChildRoutes, regionSubdomainExtraChildRoutes } from "./routes/regionPortalChildren";
 import RegionHub from "./pages/RegionHub";
 import RegionBoard from "./pages/RegionBoard";
 import RegionBoardWrite from "./pages/RegionBoardWrite";
@@ -6269,17 +6269,22 @@ export default function App() {
   <div ref={appBodyRef} className="su-appBody" style={{ paddingBottom: 72 }}>
         <Suspense fallback={<div style={{ padding: 24, textAlign: 'center' }}>로딩 중...</div>}>
           <Routes>
-          {/* 루트: 메인 → /home, 지역 서브도메인 → 지역 허브 */}
+          {/* 루트: 메인 → /home, 지역 서브도메인 → 지역 허브 (하위는 index만 — /shops 등 전역 경로와 충돌 방지) */}
           <Route path="/" element={<AppRootEntry />}>
-            {regionPortalChildRoutes}
+            <Route index element={<RegionHub />} />
+            {isRegionHost ? regionSubdomainExtraChildRoutes : null}
           </Route>
 
           <Route path="/home" element={<Home />} />
           <Route path="/search" element={<Search />} />
           <Route path="/community" element={<Community />} />
-          {!isRegionHost && <Route path="/chat" element={<Chat />} />}
+          <Route path="/chat" element={isRegionHost ? <RegionLayout /> : <Chat />}>
+            {isRegionHost && <Route index element={<RegionChatRooms />} />}
+          </Route>
           <Route path="/shops/events" element={<ShopEvents />} />
-          <Route path="/shops" element={<Shops />} />
+          <Route path="/shops" element={isRegionHost ? <RegionLayout /> : <Shops />}>
+            {isRegionHost && <Route index element={<RegionShops />} />}
+          </Route>
           <Route path="/shops/:id" element={<ShopDetail />} />
           <Route path="/my" element={<MyPageWithVipVoucherBridge />} />
           {/* /my/card 는 내 명함 비활성화 — My 페이지의 명함 버튼으로 통일 */}
@@ -6301,9 +6306,13 @@ export default function App() {
           <Route path="/r/:regionId" element={<RegionLegacyRedirect />} />
           <Route path="/r/:regionId/*" element={<RegionLegacyRedirect />} />
           <Route path="/posts/:id" element={<PostDetail />} />
-          <Route path="/notices" element={<Notices />} />
+          <Route path="/notices" element={isRegionHost ? <RegionLayout /> : <Notices />}>
+            {isRegionHost && <Route index element={<RegionNotices />} />}
+          </Route>
           <Route path="/notices/:id" element={<Notices />} />
-          <Route path="/missions" element={<Missions />} />
+          <Route path="/missions" element={isRegionHost ? <RegionLayout /> : <Missions />}>
+            {isRegionHost && <Route index element={<Missions />} />}
+          </Route>
           <Route path="/support" element={<Support />} />
           <Route path="/distribution" element={<Distribution />} />
           <Route path="/distribution/:id" element={<Distribution />} />

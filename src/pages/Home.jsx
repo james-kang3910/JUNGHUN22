@@ -733,7 +733,7 @@ export default function Home() {
   // 🔗 타일 → 탭 이동
   const handleTileNav = (key) => {
     if (key === "region") safeTab("region");
-    else if (key === "biz") safeTab("shops");
+    else if (key === "biz") navigate("/shops");
     else if (key === "mission") safeTab("missions");
     else if (key === "community") safeTab("community");
     else if (key === "support") safeTab("support");
