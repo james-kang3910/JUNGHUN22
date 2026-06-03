@@ -3,7 +3,8 @@ import { useOutletContext } from 'react-router-dom';
 import { useRegion } from '../context/RegionContext';
 import { getSession } from '../lib/authStore';
 import * as storageAdapter from '../lib/storageAdapter';
-import { filterMembersByExactSearchQuery, normalizeExactName } from '../lib/memberSearchUtils';
+import { filterMembersByExactSearchQuery, hasDuplicateExactNameMatches, normalizeExactName } from '../lib/memberSearchUtils';
+import MemberSearchResultLabel from '../components/MemberSearchResultLabel';
 
 const API_BASE = import.meta.env.VITE_API_BASE || '';
 const MAX_ROOMS_PER_CREATOR = 3;
@@ -144,6 +145,16 @@ export default function RegionChatRooms() {
   const filteredInviteCandidates = useMemo(
     () => filterMembersByExactSearchQuery(inviteCandidates, memberQuery),
     [inviteCandidates, memberQuery]
+  );
+
+  const duplicateNameOnCreate = useMemo(
+    () => hasDuplicateExactNameMatches(inviteCandidates, memberQuery),
+    [inviteCandidates, memberQuery]
+  );
+
+  const duplicateNameOnRoomInvite = useMemo(
+    () => hasDuplicateExactNameMatches(inviteCandidates, inviteQuery),
+    [inviteCandidates, inviteQuery]
   );
 
   useEffect(() => {
@@ -822,6 +833,11 @@ export default function RegionChatRooms() {
                       caretColor: '#0f172a',
                     }}
                   />
+                  {duplicateNameOnCreate ? (
+                    <div style={{ fontSize: 11, color: '#b45309', marginBottom: 6, fontWeight: 700 }}>
+                      동명이인이 있습니다. 연락처로 구분해 선택해 주세요.
+                    </div>
+                  ) : null}
                   <div style={{ maxHeight: 180, overflowY: 'auto', borderRadius: 10, border: '1px solid var(--c-border)', background: '#fff', padding: 8, display: 'grid', gap: 6 }}>
                     {filteredInviteCandidates.length === 0 ? (
                       <div style={{ fontSize: 12, color: '#94a3b8', padding: '4px 6px' }}>
@@ -833,8 +849,7 @@ export default function RegionChatRooms() {
                       return (
                         <label key={memberId} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#0f172a' }}>
                           <input type="checkbox" checked={checked} onChange={() => toggleInvitee(memberId)} />
-                          <span>{member?.name || memberId}</span>
-                          <span style={{ color: '#94a3b8' }}>({memberId})</span>
+                          <MemberSearchResultLabel member={member} showContactWithName={duplicateNameOnCreate} />
                         </label>
                       );
                     })}
@@ -1010,6 +1025,11 @@ export default function RegionChatRooms() {
                   placeholder="회원 이름을 정확히 입력 (예: 홍길동)"
                   style={{ width: '100%', borderRadius: 10, border: '1px solid #cbd5e1', padding: '9px 10px', fontSize: 12, marginBottom: 8, background: '#fff' }}
                 />
+                {duplicateNameOnRoomInvite ? (
+                  <div style={{ fontSize: 11, color: '#b45309', marginBottom: 6, fontWeight: 700 }}>
+                    동명이인이 있습니다. 연락처로 구분해 선택해 주세요.
+                  </div>
+                ) : null}
                 <div style={{ maxHeight: 150, overflowY: 'auto', borderRadius: 10, border: '1px solid #dbeafe', background: '#fff', padding: 8, display: 'grid', gap: 6 }}>
                   {roomInviteCandidates.length === 0 ? (
                     <div style={{ fontSize: 12, color: '#94a3b8' }}>{normalizeExactName(inviteQuery) ? '이름이 정확히 일치하는 회원이 없습니다.' : '이름을 정확히 입력하면 검색됩니다.'}</div>
@@ -1019,8 +1039,7 @@ export default function RegionChatRooms() {
                     return (
                       <label key={memberId} style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12, color: '#0f172a' }}>
                         <input type="checkbox" checked={inviteTargetIds.includes(memberId)} onChange={() => toggleInviteTarget(memberId)} />
-                        <span style={{ fontWeight: 700 }}>{member?.name || '회원'}</span>
-                        <span style={{ color: '#94a3b8' }}>({memberId})</span>
+                        <MemberSearchResultLabel member={member} showContactWithName={duplicateNameOnRoomInvite} />
                       </label>
                     );
                   })}

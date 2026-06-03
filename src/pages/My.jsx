@@ -13,7 +13,8 @@ import { useNavigate, useLocation } from "react-router-dom";
 import { isLoggedIn, getSession, getAuthInfo, getCurrentUser, hydrateAuthFromServer, isAuthReady } from "../lib/authStore";
 import { canAccessRegionalConsole } from "../lib/permissions";
 import * as chatService from "../lib/chatService";
-import { filterMembersByExactSearchQuery, normalizeExactName, memberDisplayName } from "../lib/memberSearchUtils";
+import { filterMembersByExactSearchQuery, hasDuplicateExactNameMatches, normalizeExactName, memberDisplayName, memberContactDisplay } from "../lib/memberSearchUtils";
+import MemberSearchResultLabel from "../components/MemberSearchResultLabel";
 import { isPointsTransferEnabled } from "../lib/pointsGuard";
 import { calculateStatus } from "../lib/adminStore";
 import * as shopStore from "../lib/shopStore";
@@ -831,6 +832,11 @@ export default function My() {
 
     const filteredFriendCandidates = useMemo(
       () => filterMembersByExactSearchQuery(friendCandidates, friendSearchName),
+      [friendCandidates, friendSearchName]
+    );
+
+    const duplicateFriendName = useMemo(
+      () => hasDuplicateExactNameMatches(friendCandidates, friendSearchName),
       [friendCandidates, friendSearchName]
     );
 
@@ -6118,12 +6124,25 @@ export default function My() {
                 유사한 이름은 표시되지 않습니다. 이름이 완전히 일치할 때만 검색됩니다.
               </div>
             </div>
+            {duplicateFriendName ? (
+              <div style={{ marginBottom: 8, fontSize: 12, color: '#b45309', fontWeight: 700 }}>
+                동명이인이 있습니다. 이름과 연락처를 확인한 뒤 추가해 주세요.
+              </div>
+            ) : null}
             <div style={{ maxHeight: 420, overflowY: 'auto' }}>
               {filteredFriendCandidates.length > 0 ? filteredFriendCandidates.map((m) => (
-                <div key={m.id || m.memberId} className="su-listItem" style={{ display: 'flex', justifyContent: 'space-between' }}>
-                  <div>
-                    <div style={{ fontWeight: 700 }}>{m.name}</div>
-                    <div style={{ fontSize: 12, color: 'var(--c-tx-s)' }}>{m.phone || m.email || ''}</div>
+                <div key={m.id || m.memberId} className="su-listItem" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    {duplicateFriendName ? (
+                      <MemberSearchResultLabel member={m} showContactWithName />
+                    ) : (
+                      <>
+                        <div style={{ fontWeight: 700 }}>{memberDisplayName(m) || m.name}</div>
+                        {memberContactDisplay(m) ? (
+                          <div style={{ fontSize: 12, color: 'var(--c-tx-s)' }}>{memberContactDisplay(m)}</div>
+                        ) : null}
+                      </>
+                    )}
                   </div>
                   <div>
                     <button type="button" onClick={() => handleAddFriend(m)} style={{ padding: '6px 10px', borderRadius: 6, background: '#0C5460', color: '#fff' }}>추가</button>
