@@ -12,6 +12,7 @@ import { getLatestShareBroadcasts } from "../lib/shareBroadcastStore";
 import { getMissions, getEvents, calculateStatus, getPublicNotices, getAuditions } from "../lib/adminStore";
 import { normalizeAuditionRankLabel } from "../lib/auditionSchedule";
 import * as storageAdapter from "../lib/storageAdapter";
+import { resolvePublicAuthorName } from "../lib/noticeUtils";
 import LiveBroadcastPlayer from "../components/LiveBroadcastPlayer";
 import useAutoRefresh from "../hooks/useAutoRefresh";
 
@@ -221,7 +222,7 @@ export default function Home() {
           ...item,
           body: item.content || item.body || '',
           date: formatNoticeDate(item.createdAt),
-          author: item.author || item.writer || '관리자',
+          author: item.author || item.writer || '',
         }));
     } catch (e) {
       return [];
@@ -1570,7 +1571,12 @@ export default function Home() {
                   <span style={{ display: 'inline-flex', alignItems: 'center', minHeight: 22, padding: '0 8px', borderRadius: 999, background: 'rgba(14,116,144,0.10)', color: '#0e7490', fontSize: 11, fontWeight: 800 }}>
                     {getNoticeAudienceLabel(item, noticeRegionNameMap)}
                   </span>
-                  <span>{(item.author || item.writer || '관리자')} · {item.date || ''}</span>
+                  <span>
+                    {[
+                      resolvePublicAuthorName(item.author, item.writer, item.authorName, item.author_name),
+                      item.date || '',
+                    ].filter(Boolean).join(' · ')}
+                  </span>
                 </div>
               </div>
             ))
@@ -1644,8 +1650,15 @@ export default function Home() {
                   {notice && notice.title ? notice.title : '공지'}
                 </div>
                 <div style={{ marginTop: 6, fontSize: 12, color: '#64748b' }}>
-                  {notice && notice.author ? notice.author : '관리자'}
-                  {notice && notice.date ? (' · ' + notice.date) : ''}
+                  {[
+                    resolvePublicAuthorName(
+                      notice?.author,
+                      notice?.writer,
+                      notice?.authorName,
+                      notice?.author_name,
+                    ),
+                    notice?.date || '',
+                  ].filter(Boolean).join(' · ')}
                 </div>
               </div>
 

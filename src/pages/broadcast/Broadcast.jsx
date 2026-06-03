@@ -8,6 +8,7 @@ import { getViewerRegionId } from "../../lib/viewerRegionStore";
 import "../../styles/broadcast-list.css";
 import LiveBroadcastPlayer from "../../components/LiveBroadcastPlayer";
 import PageHeader from "../../components/PageHeader";
+import { resolvePublicAuthorName } from "../../lib/noticeUtils";
 
 export default function Broadcast() {
   const navigate = useNavigate();
@@ -477,9 +478,18 @@ export default function Broadcast() {
                       color: '#637074',
                       display: 'flex',
                       gap: 12,
-                      marginTop: 4
+                      marginTop: 4,
+                      flexWrap: 'wrap',
                     }}>
-                      <span>👤 {it.uploaderName || '관리자'}</span>
+                      {(() => {
+                        const publicUploader = resolvePublicAuthorName(
+                          it.uploaderName,
+                          it.uploader,
+                          it.authorName,
+                          it.author_name,
+                        );
+                        return publicUploader ? <span>👤 {publicUploader}</span> : null;
+                      })()}
                       <span 
                         title={formatFullDateTime(it.createdAt || it.time)}
                         style={{ cursor: 'help' }}
