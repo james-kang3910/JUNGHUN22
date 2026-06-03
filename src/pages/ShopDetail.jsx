@@ -3,7 +3,7 @@ import { useNavigate, useParams, useLocation } from "react-router-dom";
 import * as storageAdapter from "../lib/storageAdapter";
 import { register, unregister } from "../lib/ssotRegistry";
 import { getAuthInfo } from "../lib/authStore";
-import { buildAbsoluteUrl, generateQrDataUrl, downloadDataUrl } from "../lib/qrLink";
+import { buildShopPublicUrl, generateQrDataUrl, downloadDataUrl } from "../lib/qrLink";
 import MultiImageUploader, { normalizeImageList } from "../components/MultiImageUploader";
 import SiteConfirmModal from "../components/SiteConfirmModal";
 import SiteAlertModal from "../components/SiteAlertModal";
@@ -288,7 +288,7 @@ export default function ShopDetail() {
       }
       setShopQrLoading(true);
       try {
-        const targetUrl = buildAbsoluteUrl(`/shops/${encodeURIComponent(shopId)}`);
+        const targetUrl = buildShopPublicUrl(shopId);
         const dataUrl = await generateQrDataUrl(targetUrl, 280);
         if (!cancelled) setShopQrDataUrl(dataUrl);
       } catch (error) {
@@ -558,7 +558,7 @@ export default function ShopDetail() {
   const canAddMoreShopImages = existingShopImageCount + pendingShopImageCount < 3;
   const mapAddress = String(shop?.address || '').trim();
   const mapMarkerPosition = getKoreaMapMarkerPosition(resolvedMapLocation);
-  const shopPublicUrl = buildAbsoluteUrl(`/shops/${encodeURIComponent(String(shop?.id || shop?.shopId || id || ''))}`);
+  const shopPublicUrl = buildShopPublicUrl(String(shop?.id || shop?.shopId || id || ''));
 
   const handleShopImagesChange = (e) => {
     const selectedFiles = Array.from(e.target.files || []);

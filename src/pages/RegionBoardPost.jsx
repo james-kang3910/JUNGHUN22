@@ -8,6 +8,7 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useRegion } from '../context/RegionContext';
+import { useBuildRegionPath } from '../hooks/useBuildRegionPath';
 import { getBoardPost, deleteBoardPost, getBoardComments, addBoardComment, deleteBoardComment } from '../lib/storageAdapter';
 import { getCurrentUser } from '../lib/authStore';
 
@@ -20,6 +21,7 @@ const CATEGORY_LABEL = {
 
 export default function RegionBoardPost() {
   const { regionId } = useRegion();
+  const toRegion = useBuildRegionPath();
   const { postId } = useParams();
   const navigate = useNavigate();
 
@@ -67,7 +69,7 @@ export default function RegionBoardPost() {
     const me = getCurrentUser();
     const currentMemberId = String(me?.memberId || window.__SU_SESSION__?.memberId || '').trim();
     if (!currentMemberId) {
-      navigate('/auth', { state: { returnTo: `/r/${regionId}/board/${postId}` } });
+      navigate('/auth', { state: { returnTo: toRegion(`/board/${postId}`) } });
       return;
     }
     setAddingComment(true);
@@ -116,7 +118,7 @@ export default function RegionBoardPost() {
     setDeleting(true);
     try {
       await deleteBoardPost(postId);
-      navigate(`/r/${regionId}/board`, { replace: true });
+      navigate(toRegion('/board'), { replace: true });
     } catch (e) {
       console.error('[RegionBoardPost] delete error:', e);
       alert('삭제에 실패했습니다. 다시 시도해 주세요.');
@@ -126,7 +128,7 @@ export default function RegionBoardPost() {
   }
 
   function handleEdit() {
-    navigate(`/r/${regionId}/board/write`, { state: { post } });
+    navigate(toRegion('/board/write'), { state: { post } });
   }
 
   // ── 공통 레이아웃 wrapper ─────────────────────────────
@@ -143,7 +145,7 @@ export default function RegionBoardPost() {
       <div style={{ display: 'flex', alignItems: 'center', padding: '14px 0 10px', gap: 6 }}>
         <button
           type="button"
-          onClick={() => navigate(`/r/${regionId}/board`)}
+          onClick={() => navigate(toRegion('/board'))}
           style={{
             background: 'none', border: 'none', cursor: 'pointer', padding: '4px 6px',
             fontSize: 15, color: 'var(--c-primary, #0E7490)', fontWeight: 700,
@@ -181,7 +183,7 @@ export default function RegionBoardPost() {
             </div>
             <button
               type="button"
-              onClick={() => navigate(`/r/${regionId}/board`)}
+              onClick={() => navigate(toRegion('/board'))}
               style={{ marginTop: 12, padding: '10px 28px', borderRadius: 999, background: 'var(--c-primary)', color: '#fff', fontWeight: 700, fontSize: 13, border: 'none', cursor: 'pointer' }}
             >
               목록으로
@@ -395,7 +397,7 @@ export default function RegionBoardPost() {
               댓글을 작성하려면{' '}
               <button
                 type="button"
-                onClick={() => navigate('/auth', { state: { returnTo: `/r/${regionId}/board/${postId}` } })}
+                onClick={() => navigate('/auth', { state: { returnTo: toRegion(`/board/${postId}`) } })}
                 style={{ background: 'none', border: 'none', cursor: 'pointer', color: 'var(--c-primary)', fontWeight: 700, fontSize: 13, padding: 0 }}
               >
                 로그인

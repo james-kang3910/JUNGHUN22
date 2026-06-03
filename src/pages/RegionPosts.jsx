@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import * as storageAdapter from "../lib/storageAdapter";
+import { buildRegionPath } from "../lib/regionRoutes";
 
 export default function RegionPosts() {
   const { regionCode } = useParams();
@@ -87,9 +88,9 @@ export default function RegionPosts() {
 
   function handleItemClick(item) {
     if (item.type === 'event') {
-      navigate(`/r/${regionCode}/missions`);
+      navigate(buildRegionPath(regionCode, '/missions'));
     } else {
-      navigate(`/r/${regionCode}/missions`);
+      navigate(buildRegionPath(regionCode, '/missions'));
     }
   }
 

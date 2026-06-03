@@ -3,13 +3,15 @@
  * 
  * regionId를 전역으로 공급합니다.
  * 
- * Phase 1 (현재): URL 파라미터 /r/:regionId 에서 읽음
- * Phase 2 (나중): hostname seoul.smi.ceo 에서 자동 읽음
- * 
- * Phase 2 전환 시 getRegionId() 함수의 Phase 2 블록 주석만 제거하면 됩니다.
+ * Phase 1: /ulsan 짧은 경로, /r/:id 레거시
+ * Phase 2: ulsan.smi.ceo 서브도메인
  */
 
 import { createContext, useContext, useMemo } from 'react';
+import {
+  getRegionSlugFromHostname,
+  parseRegionPathname,
+} from '../lib/regionRoutes';
 
 const RegionContext = createContext(null);
 
@@ -19,17 +21,14 @@ const RegionContext = createContext(null);
  * 이 함수는 Context 외부에서 fallback용으로만 사용됩니다.
  */
 export function getRegionIdFromEnv() {
-  // ── Phase 2: 서브도메인 방식 (나중에 활성화) ──────────────────────────
-  // const host = window.location.hostname; // "seoul.smi.ceo"
-  // const parts = host.split('.');
-  // if (parts.length >= 3 && parts[0] !== 'www' && parts[0] !== 'smi') {
-  //   return parts[0]; // "seoul"
-  // }
-  // ─────────────────────────────────────────────────────────────────────
+  const hostSlug = getRegionSlugFromHostname();
+  if (hostSlug) return hostSlug;
 
-  // ── Phase 1: URL 파라미터 방식 (지금) ─────────────────────────────────
-  const match = window.location.pathname.match(/^\/r\/([^/]+)/);
-  if (match) return match[1];
+  const parsed = parseRegionPathname(window.location.pathname);
+  if (parsed?.regionKey) return parsed.regionKey;
+
+  const legacy = window.location.pathname.match(/^\/r\/([^/]+)/);
+  if (legacy) return legacy[1];
 
   // ── 폴백: localStorage ────────────────────────────────────────────────
   try {

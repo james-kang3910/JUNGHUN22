@@ -5,6 +5,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useOutletContext, useNavigate } from 'react-router-dom';
 import { useRegion } from '../context/RegionContext';
+import { useBuildRegionPath } from '../hooks/useBuildRegionPath';
 import { getRegionEvents, getEvents } from '../lib/storageAdapter';
 
 function fmtDate(d) {
@@ -15,6 +16,7 @@ function fmtDate(d) {
 
 export default function RegionEvents() {
   const { regionId } = useRegion();
+  const toRegion = useBuildRegionPath();
   useOutletContext() || {};
   const navigate = useNavigate();
 
@@ -133,7 +135,7 @@ export default function RegionEvents() {
                   )}
                   {ev.mission_id && !isEnded && (
                     <button
-                      onClick={() => navigate(`/r/${regionId}/missions`)}
+                      onClick={() => navigate(toRegion('/missions'))}
                       style={{ width: '100%', padding: '10px 0', background: 'linear-gradient(135deg, #0E7490, #0B5F73)', border: 'none', borderRadius: 12, color: '#fff', fontSize: 14, fontWeight: 700, cursor: 'pointer' }}>
                       참여하기 →
                     </button>

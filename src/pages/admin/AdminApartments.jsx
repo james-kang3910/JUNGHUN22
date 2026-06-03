@@ -4,6 +4,7 @@ import MultiImageUploader from "../../components/MultiImageUploader";
 import * as storageAdapter from "../../lib/storageAdapter";
 import { getApartments, upsertApartment, deleteApartment, getDistricts } from "../../lib/storageAdapter";
 import { isAdminAuthenticatedLocal } from "../../lib/adminAuth";
+import { buildRegionPath } from "../../lib/regionRoutes";
 import AdminModalForm from "./components/AdminModalForm";
 import ConfirmDialog from "./components/ConfirmDialog";
 import Toast from "./components/Toast";
@@ -331,7 +332,7 @@ export default function AdminApartments() {
               </span>
             </div>
             <div style={actionStyle}>
-              <button style={boardBtnStyle} onClick={() => navigate(`/r/${regionId}/apt/${apt.id}`)}>
+              <button style={boardBtnStyle} onClick={() => navigate(buildRegionPath(regionId, `/apt/${apt.id}`))}>
                 📋 게시판
               </button>
               <button style={editBtnStyle} onClick={() => openEditModal(apt)}>✏️ 수정</button>

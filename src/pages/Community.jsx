@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { getSession, getAuthInfo, isLoggedIn } from "../lib/authStore";
+import { buildRegionPath } from "../lib/regionRoutes";
 
 export default function Community() {
   const navigate = useNavigate();
@@ -16,7 +17,7 @@ export default function Community() {
           session?.regionId || session?.region_id;
 
         if (regionId) {
-          navigate(`/r/${regionId}/board`);
+          navigate(buildRegionPath(regionId, '/board'));
           return;
         }
 
@@ -30,7 +31,7 @@ export default function Community() {
               const m = j.member || j;
               const rid = m?.regionId || m?.region_id;
               if (rid) {
-                navigate(`/r/${rid}/board`);
+                navigate(buildRegionPath(rid, '/board'));
                 return;
               }
             }
@@ -50,7 +51,7 @@ export default function Community() {
           if (first) {
             const rid = first.regionId || first.region_id;
             if (rid) {
-              navigate(`/r/${rid}/board`, { replace: true });
+              navigate(buildRegionPath(rid, '/board'), { replace: true });
               return;
             }
           }

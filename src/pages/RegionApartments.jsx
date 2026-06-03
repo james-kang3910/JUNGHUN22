@@ -9,6 +9,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useOutletContext } from 'react-router-dom';
 import { getApartments } from '../lib/storageAdapter';
+import { buildRegionPath } from '../lib/regionRoutes';
 
 export default function RegionApartments() {
   const { regionId } = useParams();
@@ -171,7 +172,7 @@ export default function RegionApartments() {
             <div
               key={apt.id}
               style={cardStyle}
-              onClick={() => navigate(`/r/${regionId}/apt/${apt.id}`)}
+              onClick={() => navigate(buildRegionPath(regionId, `/apt/${apt.id}`))}
               onMouseEnter={e => { e.currentTarget.style.boxShadow = 'var(--sh-hover)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
               onMouseLeave={e => { e.currentTarget.style.boxShadow = 'var(--sh-xs), inset 0 1px 0 rgba(255,255,255,0.8)'; e.currentTarget.style.transform = 'none'; }}
             >
@@ -211,7 +212,7 @@ export default function RegionApartments() {
                 onMouseLeave={e => { e.currentTarget.style.boxShadow = 'none'; e.currentTarget.style.transform = 'none'; }}
                 onClick={e => {
                   e.stopPropagation();
-                  navigate(`/r/${regionId}/apt/${apt.id}`);
+                  navigate(buildRegionPath(regionId, `/apt/${apt.id}`));
                 }}
               >
                 입주민 게시판 →

@@ -5,16 +5,22 @@
  * PageHeader + 지역 선택 드롭다운 + 탭바(고정) + Outlet
  * 
  * 라우트 구조:
- *   /r/:regionId          → index → RegionHub
- *   /r/:regionId/board    → RegionBoard
- *   /r/:regionId/notices  → RegionNotices
- *   /r/:regionId/missions → Missions
- *   /r/:regionId/shops    → RegionShops
+ *   /:regionSlug          → index → RegionHub  (짧은 경로)
+ *   ulsan.smi.ceo/        → 서브도메인 동일
+ *   /r/:regionId/*        → 레거시 (리다이렉트)
  */
 
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Outlet, useParams, useNavigate, useLocation } from 'react-router-dom';
 import { RegionProvider } from '../context/RegionContext';
+import {
+  buildRegionPath,
+  getRegionPathPrefix,
+  getRegionSlug,
+  getRegionSlugFromHostname,
+  resolveRegionFromKey,
+  stripRegionPrefixFromPathname,
+} from '../lib/regionRoutes';
 import PageHeader from '../components/PageHeader';
 import RegionSearchModal from '../components/RegionSearchModal';
 import * as storageAdapter from '../lib/storageAdapter';
@@ -98,11 +104,18 @@ const TAB_TITLE_MAP = {
 };
 
 export default function RegionLayout() {
-  const { regionId } = useParams();
+  const params = useParams();
+  const regionKey = getRegionSlugFromHostname()
+    || params.regionKey
+    || params.regionId
+    || '';
   const navigate = useNavigate();
   const { pathname } = useLocation();
+  const [canonicalRegionId, setCanonicalRegionId] = useState(() => String(regionKey || '').trim());
+  const [urlSlug, setUrlSlug] = useState(() => String(regionKey || '').trim().toLowerCase());
+  const regionId = canonicalRegionId;
   const [regionName, setRegionName] = useState(() => {
-    const id = String(regionId || '').trim();
+    const id = String(regionKey || '').trim();
     if (!id) return '';
     return getCachedRegionName(id) || '지역';
   });
@@ -111,7 +124,7 @@ export default function RegionLayout() {
   // 기존 Outlet 호환 유지를 위해 빈 값 유지
   const [districts] = useState([]);
   const [selectedDistrictId] = useState('');
-  const [selectedRegionOptionId, setSelectedRegionOptionId] = useState(regionId || '');
+  const [selectedRegionOptionId, setSelectedRegionOptionId] = useState(regionKey || '');
   const [searchOpen, setSearchOpen] = useState(false);
 
   const isSameRegionList = useCallback((left, right) => {
@@ -131,18 +144,22 @@ export default function RegionLayout() {
   }, []);
 
   const loadRegions = useCallback(() => {
-    if (!regionId) return Promise.resolve();
+    if (!regionKey) return Promise.resolve();
     return storageAdapter.getRegions()
       .then(all => {
         const visibleRegions = (all || []).filter((region) => region?.isPublic !== false);
         writeRegionNameCache(visibleRegions);
         setRegions((prev) => (isSameRegionList(prev, visibleRegions) ? prev : visibleRegions));
-        const found = visibleRegions.find(r =>
-          String(r.id || r.regionId || r.region_id) === String(regionId)
-        );
+        const resolved = resolveRegionFromKey(regionKey, visibleRegions);
+        const found = resolved?.region;
+        const foundId = resolved?.regionId || String(regionKey).trim();
+        const nextSlug = resolved?.slug || String(regionKey).trim().toLowerCase();
+        setCanonicalRegionId((prev) => (prev === foundId ? prev : foundId));
+        setUrlSlug((prev) => (prev === nextSlug ? prev : nextSlug));
+        setSelectedRegionOptionId((prev) => (prev === foundId ? prev : foundId));
+
         if (found) {
-          const foundId = String(found.id || found.regionId || found.region_id || '').trim();
-          const nextRegionName = String(found.name || found.regionName || regionId || '').trim();
+          const nextRegionName = String(found.name || found.regionName || foundId || '').trim();
           setRegionName((prev) => (prev === nextRegionName ? prev : nextRegionName));
           try {
             if (foundId) localStorage.setItem('selectedRegionId', foundId);
@@ -150,15 +167,24 @@ export default function RegionLayout() {
           } catch (e) {
             // noop
           }
+          const suffix = stripRegionPrefixFromPathname(pathname, {
+            regionId: foundId,
+            slug: nextSlug,
+          });
+          const canonicalPath = buildRegionPath(foundId, suffix || '', { slug: nextSlug });
+          const currentPath = pathname + (typeof window !== 'undefined' ? window.location.search : '');
+          if (canonicalPath && canonicalPath !== pathname && canonicalPath !== currentPath) {
+            navigate(canonicalPath, { replace: true });
+          }
         } else if (visibleRegions.length > 0) {
-          // URL의 regionId가 DB에 없음 → localStorage 오래된 ID 자동 갱신
           const savedId = localStorage.getItem('selectedRegionId');
-          if (savedId === regionId || !savedId) {
+          if (savedId === foundId || !savedId) {
             const fallback = visibleRegions[0];
             const fallbackId = String(fallback.id || fallback.regionId || fallback.region_id);
+            const fallbackSlug = getRegionSlug(fallback);
             localStorage.setItem('selectedRegionId', fallbackId);
             if (fallback.name) localStorage.setItem('selectedRegionName', fallback.name);
-            navigate(`/r/${fallbackId}`, { replace: true });
+            navigate(buildRegionPath(fallbackId, '', { slug: fallbackSlug }), { replace: true });
           } else {
             setRegionName('지역');
           }
@@ -168,28 +194,27 @@ export default function RegionLayout() {
         setRegions((prev) => (prev.length === 0 ? prev : []));
         setRegionName((prev) => (prev === '지역' ? prev : '지역'));
       });
-  }, [isSameRegionList, regionId, navigate]);
+  }, [isSameRegionList, regionKey, pathname, navigate]);
 
   useEffect(() => {
     loadRegions();
   }, [loadRegions]);
 
-  useAutoRefresh(loadRegions, { enabled: !!regionId, intervalMs: 120000 });
+  useAutoRefresh(loadRegions, { enabled: !!regionKey, intervalMs: 120000 });
 
   useEffect(() => {
-    const nextId = String(regionId || '').trim();
-    setSelectedRegionOptionId(nextId);
-    if (!nextId) {
+    const nextKey = String(regionKey || '').trim();
+    if (!nextKey) {
       setRegionName('');
       return;
     }
-    const cachedName = getCachedRegionName(nextId);
+    const cachedName = getCachedRegionName(canonicalRegionId || nextKey);
     if (cachedName) {
       setRegionName((prev) => (prev === cachedName ? prev : cachedName));
     } else {
       setRegionName((prev) => (prev === '지역' ? prev : '지역'));
     }
-  }, [regionId]);
+  }, [regionKey, canonicalRegionId]);
 
   const regionOptions = useMemo(() => {
     return regions.map((region) => ({
@@ -200,30 +225,38 @@ export default function RegionLayout() {
     })).filter((region) => region.id);
   }, [regions]);
 
+  const pathPrefix = useMemo(
+    () => getRegionPathPrefix(canonicalRegionId, urlSlug),
+    [canonicalRegionId, urlSlug],
+  );
+
   const handleRegionChange = useCallback((e) => {
     const id = e.target.value;
     setSelectedRegionOptionId(id);
-    if (!id || String(id) === String(regionId)) return;
-    navigate(`/r/${id}`);
-  }, [navigate, regionId]);
+    if (!id || String(id) === String(canonicalRegionId)) return;
+    const target = regions.find((r) => String(r.id || r.regionId || r.region_id) === String(id));
+    const slug = target ? getRegionSlug(target) : id;
+    navigate(buildRegionPath(id, '', { slug }));
+  }, [navigate, canonicalRegionId, regions]);
 
-  const getTabPath = (tabPath) => `/r/${regionId}${tabPath}`;
+  const getTabPath = useCallback(
+    (tabPath) => buildRegionPath(canonicalRegionId, tabPath, { slug: urlSlug }),
+    [canonicalRegionId, urlSlug],
+  );
 
-  const isActive = (tabPath) => {
+  const isActive = useCallback((tabPath) => {
     const full = getTabPath(tabPath);
     if (tabPath === '') {
-      return pathname === full || pathname === `/r/${regionId}/`;
+      return pathname === full
+        || pathname === `${pathPrefix}/`
+        || (pathPrefix === '' && (pathname === '/' || pathname === ''));
     }
-    return pathname.startsWith(full);
-  };
+    return pathname === full || pathname.startsWith(`${full}/`);
+  }, [getTabPath, pathname, pathPrefix]);
 
-  const activeTab = TABS.find(t => {
-    return t.path === ''
-      ? (pathname === `/r/${regionId}` || pathname === `/r/${regionId}/`)
-      : pathname.startsWith(`/r/${regionId}${t.path}`);
-  });
-  const regionRootPath = `/r/${regionId}`;
-  const isRegionRoot = pathname === regionRootPath || pathname === `${regionRootPath}/`;
+  const activeTab = TABS.find((t) => isActive(t.path));
+  const regionRootPath = getTabPath('');
+  const isRegionRoot = isActive('');
   const handleHeaderBack = () => {
     // 지역 하위 페이지에서는 지역홈으로, 지역홈에서는 지역선택으로 이동
     if (!isRegionRoot) {
@@ -233,7 +266,7 @@ export default function RegionLayout() {
     navigate('/region', { replace: true });
   };
   const headerTitle = (activeTab && TAB_TITLE_MAP[activeTab.path])
-    || MORE_ITEMS.find(m => pathname.startsWith(`/r/${regionId}${m.path}`))?.label
+    || MORE_ITEMS.find((m) => pathname.startsWith(getTabPath(m.path)))?.label
     || regionName;
 
   return (

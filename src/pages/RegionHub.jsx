@@ -9,11 +9,12 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useOutletContext } from 'react-router-dom';
 import { useRegion } from '../context/RegionContext';
+import { useBuildRegionPath } from '../hooks/useBuildRegionPath';
 import VideoEmbed from '../components/VideoEmbed';
 import { isDirectVideoUrl, parseYouTubeId } from '../lib/videoUtils';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 import { getRegionById } from '../data/regions.seed';
-import { buildAbsoluteUrl, generateQrDataUrl, downloadDataUrl } from '../lib/qrLink';
+import { buildRegionPublicUrl, generateQrDataUrl, downloadDataUrl } from '../lib/qrLink';
 
 function resolveNoticeImageUrl(imageUrl) {
   const raw = String(imageUrl || '').trim();
@@ -44,6 +45,7 @@ function WeatherWidget({ lat, lon, regionName }) {
 
 export default function RegionHub() {
   const { regionId } = useRegion();
+  const toRegion = useBuildRegionPath();
   // 지역 좌표 매핑
   let lat = 37.5665, lon = 126.9780, regionLabel = '서울'; // 기본값: 서울
   if (regionId) {
@@ -154,7 +156,7 @@ export default function RegionHub() {
       }
       setRegionQrLoading(true);
       try {
-        const targetUrl = buildAbsoluteUrl(`/r/${encodeURIComponent(rid)}`);
+        const targetUrl = buildRegionPublicUrl(rid);
         const dataUrl = await generateQrDataUrl(targetUrl, 280);
         if (!cancelled) setRegionQrDataUrl(dataUrl);
       } catch (error) {
@@ -169,7 +171,7 @@ export default function RegionHub() {
     };
   }, [regionId]);
 
-  const regionPortalUrl = buildAbsoluteUrl(`/r/${encodeURIComponent(String(regionId || ''))}`);
+  const regionPortalUrl = buildRegionPublicUrl(regionId);
 
   if (loading) {
     return (
@@ -239,12 +241,12 @@ export default function RegionHub() {
         {/* Quick CTA — 2열 진입 메뉴 */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6 }}>
           {[
-            { icon: '🎯', label: '미션/이벤트', path: `/r/${regionId}/missions` },
-            { icon: '🎤', label: '오디션',   path: `/r/${regionId}/auditions` },
-            { icon: '🏪', label: '상권/상점', path: `/r/${regionId}/shops` },
-            { icon: '🏢', label: '아파트',   path: `/r/${regionId}/apt` },
-            { icon: '📰', label: '전단',     path: `/r/${regionId}/flyers` },
-            { icon: '💬', label: '지역채팅', path: `/r/${regionId}/chat`, bg: 'rgba(166,114,255,0.22)', border: '1px solid rgba(216,191,255,0.52)' },
+            { icon: '🎯', label: '미션/이벤트', path: toRegion('/missions') },
+            { icon: '🎤', label: '오디션',   path: toRegion('/auditions') },
+            { icon: '🏪', label: '상권/상점', path: toRegion('/shops') },
+            { icon: '🏢', label: '아파트',   path: toRegion('/apt') },
+            { icon: '📰', label: '전단',     path: toRegion('/flyers') },
+            { icon: '💬', label: '지역채팅', path: toRegion('/chat'), bg: 'rgba(166,114,255,0.22)', border: '1px solid rgba(216,191,255,0.52)' },
           ].map(btn => (
             <button
               key={btn.label}
@@ -282,7 +284,7 @@ export default function RegionHub() {
           <SectionHead
             icon="📋"
             title="공지사항"
-            onMore={() => navigate(`/r/${regionId}/notices`)}
+            onMore={() => navigate(toRegion('/notices'))}
           />
           {notices.length === 0 ? (
             <EmptyCard icon="📋" title="공지사항이 없습니다" desc="" />
@@ -297,7 +299,7 @@ export default function RegionHub() {
                 return (
                 <div
                   key={n.id}
-                  onClick={() => navigate(`/r/${regionId}/notices`)}
+                  onClick={() => navigate(toRegion('/notices'))}
                   style={{
                     display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2,
                     padding: '12px 16px',
@@ -344,7 +346,7 @@ export default function RegionHub() {
           <SectionHead
             icon="📡"
             title="지역 방송"
-            onMore={() => navigate(`/r/${regionId}/broadcasts`)}
+            onMore={() => navigate(toRegion('/broadcasts'))}
           />
           {broadcasts.length === 0 ? (
             <EmptyCard icon="📡" title="진행 중인 방송이 없습니다" desc="곧 표시됩니다" />
@@ -354,7 +356,7 @@ export default function RegionHub() {
                 <BroadcastCard
                   key={b.broadcastId || b.id}
                   broadcast={b}
-                  onClick={() => navigate(`/r/${regionId}/broadcasts`)}
+                  onClick={() => navigate(toRegion('/broadcasts'))}
                 />
               ))}
             </div>
@@ -366,7 +368,7 @@ export default function RegionHub() {
           <SectionHead
             icon="📰"
             title="지역 뉴스"
-            onMore={() => navigate(`/r/${regionId}/news`)}
+            onMore={() => navigate(toRegion('/news'))}
           />
           {regionNews.length === 0 ? (
             <EmptyCard icon="📰" title="등록된 뉴스가 없습니다" desc="업데이트 대기 중" />
@@ -379,7 +381,7 @@ export default function RegionHub() {
               {regionNews.map((n, idx) => (
                 <div
                   key={n.id || n.newsId || idx}
-                  onClick={() => n.url ? window.open(n.url, '_blank') : navigate(`/r/${regionId}/news`)}
+                  onClick={() => n.url ? window.open(n.url, '_blank') : navigate(toRegion('/news'))}
                   style={{
                     display: 'flex', alignItems: 'flex-start', gap: 12,
                     padding: '13px 16px',
@@ -431,7 +433,7 @@ export default function RegionHub() {
                     if (itemType === 'mission') {
                       const missionId = item.id || item.missionId || item.mission_id || null;
                       if (missionId) {
-                        navigate(`/r/${regionId}/missions`, {
+                        navigate(toRegion('/missions'), {
                           state: {
                             scrollTo: 'mission',
                             highlightType: 'mission',
@@ -440,7 +442,7 @@ export default function RegionHub() {
                         });
                         return;
                       }
-                      navigate(`/r/${regionId}/missions`, { state: { scrollTo: 'mission' } });
+                      navigate(toRegion('/missions'), { state: { scrollTo: 'mission' } });
                       return;
                     }
                     if (itemType === 'audition') {
@@ -449,7 +451,7 @@ export default function RegionHub() {
                         navigate(`/audition/${auditionId}`);
                         return;
                       }
-                      navigate(`/r/${regionId}/auditions`);
+                      navigate(toRegion('/auditions'));
                       return;
                     }
                     if (itemType === 'broadcast') {
@@ -463,7 +465,7 @@ export default function RegionHub() {
                         });
                         return;
                       }
-                      navigate(`/r/${regionId}/broadcasts`);
+                      navigate(toRegion('/broadcasts'));
                     }
                   }}
                 />

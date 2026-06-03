@@ -8,10 +8,12 @@
 import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useRegion } from '../context/RegionContext';
+import { useBuildRegionPath } from '../hooks/useBuildRegionPath';
 import { getBoards } from '../lib/storageAdapter';
 
 export default function RegionBoard() {
   const { regionId } = useRegion();
+  const toRegion = useBuildRegionPath();
   const navigate = useNavigate();
   const [posts, setPosts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -70,7 +72,7 @@ export default function RegionBoard() {
               onMouseLeave={e => { e.currentTarget.style.boxShadow = 'var(--sh-xs)'; e.currentTarget.style.transform = 'none'; }}
               onMouseDown={e => { e.currentTarget.style.transform = 'scale(0.97)'; e.currentTarget.style.boxShadow = 'none'; }}
               onMouseUp={e => { e.currentTarget.style.transform = 'translateY(-1px)'; }}
-              onClick={() => navigate(`/r/${regionId}/board/write`)}
+              onClick={() => navigate(toRegion('/board/write'))}
             >
               + 글쓰기
             </button>
@@ -91,7 +93,7 @@ export default function RegionBoard() {
               style={{ padding: '11px 28px', borderRadius: 'var(--r-badge, 999px)', background: 'var(--c-primary)', color: '#fff', fontWeight: 700, fontSize: 14, border: 'none', cursor: 'pointer', boxShadow: 'var(--sh-sm)', transition: 'box-shadow 0.18s, transform 0.15s' }}
               onMouseEnter={e => { e.currentTarget.style.boxShadow = 'var(--sh-hover)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
               onMouseLeave={e => { e.currentTarget.style.boxShadow = 'var(--sh-sm)'; e.currentTarget.style.transform = 'none'; }}
-              onClick={() => navigate(`/r/${regionId}/board/write`)}
+              onClick={() => navigate(toRegion('/board/write'))}
             >
               지금 글쓰기
             </button>
@@ -102,7 +104,7 @@ export default function RegionBoard() {
               <div
                 key={post.id || post.boardId}
                 style={cardStyle}
-                onClick={() => navigate(`/r/${regionId}/board/${post.id || post.boardId}`)}
+                onClick={() => navigate(toRegion(`/board/${post.id || post.boardId}`))}
                 onMouseEnter={e => { e.currentTarget.style.boxShadow = 'var(--sh-hover)'; e.currentTarget.style.transform = 'translateY(-1px)'; }}
                 onMouseLeave={e => { e.currentTarget.style.boxShadow = 'var(--sh-xs), inset 0 1px 0 rgba(255,255,255,0.8)'; e.currentTarget.style.transform = 'none'; }}
               >

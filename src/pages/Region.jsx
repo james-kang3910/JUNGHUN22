@@ -4,6 +4,7 @@ import PageHeader from "../components/PageHeader";
 import { getRegionById, getMissions, getEvents, getShops, getPublicNotices } from "../lib/adminStore";
 import * as storageAdapter from "../lib/storageAdapter";
 import { isRegionRegistered } from "../lib/regionUtils";
+import { buildRegionPath } from "../lib/regionRoutes";
 import { getSession, getMemberById } from "../lib/authStore";
 import { canParticipate, getParticipationBlockedReason, checkIsAdmin } from "../lib/viewerRegionStore";
 import * as participationService from "../lib/participationService";
@@ -618,7 +619,7 @@ export default function Region() {
           {/* 지역뉴스 바로가기 */}
           <button
             type="button"
-            onClick={() => navigate(`/r/${id}/news`)}
+            onClick={() => navigate(buildRegionPath(id, '/news'))}
             style={{
               display: "flex",
               alignItems: "center",
@@ -825,7 +826,7 @@ export default function Region() {
             <div
               className="su-card"
               style={{ cursor: 'pointer' }}
-              onClick={() => navigate(`/r/${id}/missions`)}
+              onClick={() => navigate(buildRegionPath(id, '/missions'))}
             >
               <div style={{ fontWeight: 900 }}>🎯 미션 & 이벤트</div>
               <div style={{ marginTop: 6, fontSize: 13, opacity: 0.85 }}>

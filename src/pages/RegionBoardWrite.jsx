@@ -12,6 +12,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
 import BackButton from '../components/BackButton';
 import { useRegion } from '../context/RegionContext';
+import { useBuildRegionPath } from '../hooks/useBuildRegionPath';
 import { createBoardPost, updateBoardPost } from '../lib/storageAdapter';
 import { getCurrentUser } from '../lib/authStore';
 
@@ -70,6 +71,7 @@ const submitBtnStyle = {
 
 export default function RegionBoardWrite() {
   const { regionId } = useRegion();
+  const toRegion = useBuildRegionPath();
   const navigate = useNavigate();
   const location = useLocation();
   const editPost = location.state?.post || null; // 수정 모드 시 기존 데이터
@@ -119,7 +121,7 @@ export default function RegionBoardWrite() {
           authorName,
         });
       }
-      navigate(`/r/${regionId}/board`, { replace: true });
+      navigate(toRegion('/board'), { replace: true });
     } catch (e) {
       console.error('[RegionBoardWrite] submit error:', e);
       setError(e.message || '저장에 실패했습니다. 다시 시도해주세요.');
@@ -134,7 +136,7 @@ export default function RegionBoardWrite() {
 
         {/* 헤더 */}
         <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '16px 0 20px' }}>
-          <BackButton tone="neutral" onClick={() => navigate(`/r/${regionId}/board`)} />
+          <BackButton tone="neutral" onClick={() => navigate(toRegion('/board'))} />
           <h1 style={{ fontSize: 17, fontWeight: 800, color: 'var(--c-tx-h, #0F172A)', margin: 0 }}>
             {editPost ? '게시글 수정' : '글쓰기'}
           </h1>

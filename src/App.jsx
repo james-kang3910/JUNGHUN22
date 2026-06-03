@@ -16,6 +16,7 @@ import {
   signOut,
 } from "./lib/authStore";
 import { boot } from "./lib/authStore";
+import { buildRegionPath, isRegionSubdomainHost } from "./lib/regionRoutes";
 import { syncOnAppStart } from "./lib/syncManager";
 import Home from "./pages/Home";
 import Search from "./pages/Search";
@@ -39,6 +40,10 @@ import RegionSelectPage from "./pages/RegionSelectPage";
 import RegionPosts from "./pages/RegionPosts";
 import RegionNotices from "./pages/RegionNotices";
 import RegionLayout from "./pages/RegionLayout";
+import AppRootEntry from "./components/AppRootEntry";
+import RegionLegacyRedirect from "./components/RegionLegacyRedirect";
+import RegionSlugGate from "./components/RegionSlugGate";
+import { regionPortalChildRoutes } from "./routes/regionPortalChildren";
 import RegionHub from "./pages/RegionHub";
 import RegionBoard from "./pages/RegionBoard";
 import RegionBoardWrite from "./pages/RegionBoardWrite";
@@ -1580,7 +1585,7 @@ function AppBottomNav({ isLoggedIn, authReady, onLogout }) {
           } catch (e) {
             // noop
           }
-          navigate(`/r/${memberRegionId}`);
+          navigate(buildRegionPath(memberRegionId));
           return;
         }
         navigate("/region");
@@ -6042,7 +6047,7 @@ function GlobalChatFloatingBadge({ isLoggedIn }) {
     dragStateRef.current = null;
     if (!moved) {
       setUnreadCount(0);
-      navigate(`/r/${encodeURIComponent(regionId)}/chat`);
+      navigate(buildRegionPath(regionId, '/chat'));
     }
   };
 
@@ -6134,6 +6139,7 @@ function GlobalChatFloatingBadge({ isLoggedIn }) {
 }
 
 export default function App() {
+  const isRegionHost = useMemo(() => isRegionSubdomainHost(), []);
   useEffect(() => {
     // ensure member profile exists on first app load (fallback when no signup page exists)
     try {
@@ -6263,13 +6269,15 @@ export default function App() {
   <div ref={appBodyRef} className="su-appBody" style={{ paddingBottom: 72 }}>
         <Suspense fallback={<div style={{ padding: 24, textAlign: 'center' }}>로딩 중...</div>}>
           <Routes>
-          {/* Redirect root to /home */}
-          <Route path="/" element={<Navigate to="/home" replace />} />
+          {/* 루트: 메인 → /home, 지역 서브도메인 → 지역 허브 */}
+          <Route path="/" element={<AppRootEntry />}>
+            {regionPortalChildRoutes}
+          </Route>
 
           <Route path="/home" element={<Home />} />
           <Route path="/search" element={<Search />} />
           <Route path="/community" element={<Community />} />
-          <Route path="/chat" element={<Chat />} />
+          {!isRegionHost && <Route path="/chat" element={<Chat />} />}
           <Route path="/shops/events" element={<ShopEvents />} />
           <Route path="/shops" element={<Shops />} />
           <Route path="/shops/:id" element={<ShopDetail />} />
@@ -6289,26 +6297,9 @@ export default function App() {
           <Route path="/portal/region/:id" element={<Region />} />
           <Route path="/portal/region/:regionId/notices" element={<RegionNotices />} />
           <Route path="/regions/:regionCode/posts" element={<RegionPosts />} />
-          {/* ★ 지역 허브 (신규) */}
-          <Route path="/r/:regionId" element={<RegionLayout />}>
-            <Route index element={<RegionHub />} />
-            <Route path="board" element={<RegionBoard />} />
-            <Route path="board/write" element={<RegionBoardWrite />} />
-            <Route path="board/:postId" element={<RegionBoardPost />} />
-            <Route path="notices" element={<RegionNotices />} />
-            <Route path="missions" element={<Missions />} />
-            <Route path="shops" element={<RegionShops />} />
-            <Route path="broadcasts" element={<RegionBroadcasts />} />
-            <Route path="auditions" element={<RegionAuditions />} />
-            <Route path="apt" element={<RegionApartments />} />
-            <Route path="apt/:aptId" element={<ApartmentBoard />} />
-            <Route path="news" element={<RegionNews />} />
-            <Route path="chat" element={<RegionChatRooms />} />
-            <Route path="intro" element={<RegionIntro />} />
-            <Route path="events" element={<RegionEvents />} />
-            <Route path="flyers" element={<RegionFlyers />} />
-            <Route path="festivals" element={<RegionFestivals />} />
-          </Route>
+          {/* 레거시 /r/:id → /:slug 리다이렉트 */}
+          <Route path="/r/:regionId" element={<RegionLegacyRedirect />} />
+          <Route path="/r/:regionId/*" element={<RegionLegacyRedirect />} />
           <Route path="/posts/:id" element={<PostDetail />} />
           <Route path="/notices" element={<Notices />} />
           <Route path="/notices/:id" element={<Notices />} />
@@ -6339,6 +6330,11 @@ export default function App() {
             <Route path="supply-managers" element={<AdminSupplyManagers />} />
             <Route path="supply-tools" element={<AdminSupplyTools />} />
             <Route path="backup-tools" element={<AdminBackupTools />} />
+          </Route>
+
+          {/* ★ 지역 허브 — 짧은 경로 smi.ceo/ulsan */}
+          <Route path="/:regionKey" element={<RegionSlugGate />}>
+            {regionPortalChildRoutes}
           </Route>
 
           {/* 404 fallback */}

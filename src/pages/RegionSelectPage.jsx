@@ -5,6 +5,7 @@ import * as storageAdapter from "../lib/storageAdapter";
 import { getDistricts } from "../lib/storageAdapter";
 import { setViewerRegionId } from "../lib/viewerRegionStore";
 import useAutoRefresh from "../hooks/useAutoRefresh";
+import { buildRegionPath } from "../lib/regionRoutes";
 
 const getProvinceLabel = (region) => String(region?.sido || region?.province || "").trim();
 const getCityLabel = (region) => String(region?.sigungu || region?.city || region?.district || "").trim();
@@ -43,7 +44,7 @@ export default function RegionSelectPage() {
       if (!regionId || regionId === "undefined" || regionId === "null") return;
       setViewerRegionId(regionId);
       localStorage.setItem("selectedRegionId", regionId);
-      navigate(`/r/${regionId}`);
+      navigate(buildRegionPath(regionId));
     }
   }, [navigate, visibleRegions]);
 
@@ -101,7 +102,7 @@ export default function RegionSelectPage() {
     }
 
     setSelectedProvince(null);
-    navigate(`/r/${id}`);
+    navigate(buildRegionPath(id));
   };
 
   const handleGoogleSearch = () => {

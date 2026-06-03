@@ -8,6 +8,7 @@ import { getCurrentUser, isLoggedIn } from "../../lib/authStore";
 import { getAuditionDateFloorInput, isAuditionClosed, normalizeAuditionRankLabel, validateAuditionDateRange } from "../../lib/auditionSchedule";
 import { canAccessAdmin, canAccessRegionalConsole, getRoleMeta, isRegionManagerRole, isRegionSuperManagerRole, ROLES } from "../../lib/permissions";
 import * as storageAdapter from "../../lib/storageAdapter";
+import { buildRegionPath } from "../../lib/regionRoutes";
 
 function getAuditionStatusMeta(item) {
   if (!isAuditionClosed(item)) return { label: '진행중', color: '#0f766e' };
@@ -2130,10 +2131,10 @@ export default function RegionalAdminConsole() {
             </div>
           </div>
           <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 10 }}>
-            <Link to={selectedRegionId ? `/r/${selectedRegionId}` : "/region"} style={{ ...primaryButtonStyle, textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>지역 포털 보기</Link>
-            <Link to={selectedRegionId ? `/r/${selectedRegionId}/board` : "/community"} style={{ ...buttonBaseStyle, textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>커뮤니티 보기</Link>
-            <Link to={selectedRegionId ? `/r/${selectedRegionId}/shops` : "/shops"} style={{ ...buttonBaseStyle, textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>상권 / 상점 보기</Link>
-            <Link to={selectedRegionId ? `/r/${selectedRegionId}/apt` : "/region"} style={{ ...buttonBaseStyle, textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>아파트 보기</Link>
+            <Link to={selectedRegionId ? buildRegionPath(selectedRegionId) : "/region"} style={{ ...primaryButtonStyle, textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>지역 포털 보기</Link>
+            <Link to={selectedRegionId ? buildRegionPath(selectedRegionId, '/board') : "/community"} style={{ ...buttonBaseStyle, textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>커뮤니티 보기</Link>
+            <Link to={selectedRegionId ? buildRegionPath(selectedRegionId, '/shops') : "/shops"} style={{ ...buttonBaseStyle, textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>상권 / 상점 보기</Link>
+            <Link to={selectedRegionId ? buildRegionPath(selectedRegionId, '/apt') : "/region"} style={{ ...buttonBaseStyle, textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>아파트 보기</Link>
             {isAdminLevel ? <Link to="/admin/contents" style={{ ...buttonBaseStyle, textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>기존 콘텐츠 관리</Link> : <button type="button" onClick={refreshData} style={buttonBaseStyle}>콘솔 새로고침</button>}
             {isAdminLevel ? <Link to="/admin/missions" style={{ ...buttonBaseStyle, textDecoration: "none", display: "flex", alignItems: "center", justifyContent: "center" }}>기존 미션/이벤트 관리</Link> : <button type="button" onClick={() => navigate("/my")} style={buttonBaseStyle}>마이오피스로 이동</button>}
           </div>

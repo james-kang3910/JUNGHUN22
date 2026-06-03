@@ -21,6 +21,8 @@ import * as shopStore from "../lib/shopStore";
 import { getShops, loadShops } from "../lib/shopStore";
 import Toast from "../components/Toast";
 import SiteConfirmModal from "../components/SiteConfirmModal";
+import { buildShopPaymentQrUrl, parseScannedQrValue } from "../lib/qrLink";
+import { buildRegionPath } from "../lib/regionRoutes";
 
 // ★ 포인트 타입 라벨 (서버 기반)
 const POINT_TYPE_LABELS = {
@@ -1753,40 +1755,40 @@ export default function My() {
                     try { stream.getTracks().forEach(t => t.stop()); } catch (e) {}
                     setScannerOpen(false);
                     const raw = String(val);
-                    
-                    // ★ URL 감지: http(s):// 로 시작하면 URL로 간주
-                    if (raw.startsWith('http://') || raw.startsWith('https://')) {
-                      clearInterval(scanIntervalRef.current);
-                      try { stream.getTracks().forEach(t => t.stop()); } catch (e) {}
-                      setScannerOpen(false);
-                      
-                      // URL 이동 or 외부 브라우저
-                      if (window.confirm(`URL로 이동하시겠습니까?\n\n${raw}`)) {
-                        window.location.href = raw;
+                    const parsed = parseScannedQrValue(raw);
+
+                    if (parsed.type === 'shop_payment' && parsed.qrPayload) {
+                      await payWithQr({
+                        qrPayload: parsed.qrPayload,
+                        shopId: parsed.shopId,
+                        amount: pendingPayAmount,
+                      });
+                      return;
+                    }
+
+                    if (parsed.type === 'payment_token' && parsed.qrPayload) {
+                      await payWithQr({ qrPayload: parsed.qrPayload, amount: pendingPayAmount });
+                      return;
+                    }
+
+                    if (parsed.type === 'shop' && parsed.shopId) {
+                      navigate(`/shops/${encodeURIComponent(parsed.shopId)}`);
+                      return;
+                    }
+
+                    if (parsed.type === 'region' && parsed.regionKey) {
+                      navigate(buildRegionPath(parsed.regionKey, parsed.suffix || ''));
+                      return;
+                    }
+
+                    if (parsed.type === 'external' && parsed.href) {
+                      if (window.confirm(`외부 링크로 이동하시겠습니까?\n\n${parsed.href}`)) {
+                        window.location.href = parsed.href;
                       }
                       return;
                     }
-                    
-                    // SSOT: accept signed token (header.payload.sig) or URL with qrPayload query
-                    let qrPayload = null;
-                    try {
-                      const qp = raw.match(/[?&]qrPayload=([^&]+)/i);
-                      if (qp) qrPayload = decodeURIComponent(qp[1]);
-                    } catch (e) {}
 
-                    if (!qrPayload) {
-                      // token format: three dot-separated parts
-                      const parts = raw.split('.');
-                      if (parts.length === 3 && parts[0] && parts[1] && parts[2]) {
-                        qrPayload = raw;
-                      }
-                    }
-
-                    if (qrPayload) {
-                      await payWithQr({ qrPayload, amount: pendingPayAmount });
-                    } else {
-                      setToast({ open: true, message: '유효하지 않은 QR입니다. (서명 토큰 필요)', type: 'error' });
-                    }
+                    setToast({ open: true, message: '유효하지 않은 QR입니다. (지역·상점 URL 또는 결제 QR)', type: 'error' });
                   }
                 }
               } catch (e) {}
@@ -3703,7 +3705,8 @@ export default function My() {
                             alert('QR 발급에 실패했습니다. (서버)');
                             return;
                           }
-                          const dataUrl = await QRCode.toDataURL(token, { margin: 4, width: 260 });
+                          const qrTarget = buildShopPaymentQrUrl(String(rep.id), token);
+                          const dataUrl = await QRCode.toDataURL(qrTarget, { margin: 4, width: 260 });
                           const w = window.open('','_blank','width=320,height=380');
                           if (w) {
                             w.document.title = '상점 QR';
@@ -3724,7 +3727,8 @@ export default function My() {
                             alert('QR 발급에 실패했습니다. (서버)');
                             return;
                           }
-                          const dataUrl = await QRCode.toDataURL(token, { margin: 4, width: 300 });
+                          const qrTarget = buildShopPaymentQrUrl(String(rep.id), token);
+                          const dataUrl = await QRCode.toDataURL(qrTarget, { margin: 4, width: 300 });
                           const img = new Image();
                           img.crossOrigin = 'anonymous';
                           img.onload = () => {

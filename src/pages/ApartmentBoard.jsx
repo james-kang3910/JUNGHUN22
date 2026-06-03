@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
+import { buildRegionPath } from '../lib/regionRoutes';
 import ContextHeader from '../components/ContextHeader';
 import MultiImageUploader, { normalizeImageList } from '../components/MultiImageUploader';
 import {
@@ -316,7 +317,7 @@ export default function ApartmentBoard() {
 
   return (
     <div style={{ background: '#F8FAFC', minHeight: '100vh', paddingBottom: 90 }}>
-      <ContextHeader title={`🏢 ${apt ? apt.name : '아파트'} 커뮤니티`} onBack={() => navigate(`/r/${regionId}/apt`)} />
+      <ContextHeader title={`🏢 ${apt ? apt.name : '아파트'} 커뮤니티`} onBack={() => navigate(buildRegionPath(regionId, '/apt'))} />
 
       <div style={{ display: 'flex', gap: 8, padding: '12px 16px 8px', overflowX: 'auto' }}>
         {SECTIONS.map((item) => (
