@@ -1,6 +1,7 @@
 // 채팅 서비스 (서버 API 연동)
 // Default backend in this workspace listens on 8787 (server/index.js)
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:8787';
+const RAW_API = import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_URL || '';
+const API_BASE = String(RAW_API || '').replace(/\/+$/, '').replace(/\/api$/, '') || (import.meta.env.DEV ? 'http://127.0.0.1:8787' : '');
 import { getAuthInfo } from './authStore';
 
 // last played message id to avoid duplicate plays across events

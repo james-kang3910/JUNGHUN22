@@ -331,9 +331,13 @@ function getAuthToken(req) {
 
 function normalizeMember(row) {
   if (!row) return null;
+  const safe = { ...row };
+  delete safe.password;
+  delete safe.password_hash;
+  delete safe.passwordHash;
+  delete safe.legacy_password;
   return {
-    ...row,
-    // Ensure both camelCase and snake_case fields exist for compatibility
+    ...safe,
     id: row.id || row.memberId || row.member_id,
     memberId: row.memberId || row.member_id,
     supplyManager: row.supplyManager !== undefined ? row.supplyManager : row.supply_manager,
@@ -345,7 +349,6 @@ function normalizeMember(row) {
     createdAt: row.createdAt || row.created_at,
     updatedAt: row.updatedAt || row.updated_at,
     cardPublic: row.cardPublic !== undefined ? row.cardPublic : row.card_public,
-    passwordHash: row.passwordHash || row.password_hash
   };
 }
 
@@ -404,6 +407,61 @@ async function requireAuth(req, res, next) {
 // 관리자 role 체크 헬퍼 — ADMIN, SUPER_ADMIN, WEBSITE_ADMIN 모두 허용
 function isAdminRole(role) {
   return ['ADMIN', 'SUPER_ADMIN', 'WEBSITE_ADMIN'].includes(String(role || '').toUpperCase());
+}
+
+function memberQualifiesAsAdmin(memberRow, memberId) {
+  if (!memberRow) return false;
+  const role = String(memberRow.role || '').toUpperCase();
+  const _saEmails = (process.env.SUPER_ADMIN_EMAIL || '').split(',').map((s) => s.trim().toLowerCase()).filter(Boolean);
+  const _saIds = (process.env.SUPER_ADMIN_MEMBER_ID || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const mid = String(memberId || memberRow.member_id || memberRow.memberId || '').trim();
+  return isAdminRole(role)
+    || _saIds.includes(mid)
+    || _saEmails.includes(String(memberRow.email || '').toLowerCase());
+}
+
+async function requireAdmin(req, res, next) {
+  try {
+    const token = getAuthToken(req);
+    if (!token) return res.status(401).json({ error: 'Unauthorized: 관리자 로그인이 필요합니다.' });
+
+    const sessionQuery = USE_POSTGRES
+      ? 'SELECT session_id, member_id, status FROM sessions WHERE session_id = $1 AND status = $2 AND (expires_at IS NULL OR expires_at > NOW())'
+      : 'SELECT sessionId, memberId, status FROM sessions WHERE sessionId = ? AND status = ?';
+    const session = await db.get(sessionQuery, USE_POSTGRES ? [token, 'ACTIVE'] : [token, 'ACTIVE']);
+    if (!session) return res.status(401).json({ error: 'Invalid or expired admin session' });
+
+    const memberId = String(session.member_id || session.memberId || '').trim();
+    if (!memberId) return res.status(403).json({ error: 'Forbidden: 관리자 세션이 유효하지 않습니다.' });
+
+    const memberRow = USE_POSTGRES
+      ? await db.get('SELECT member_id, role, email, status FROM members WHERE member_id = $1 LIMIT 1', [memberId])
+      : await db.get('SELECT memberId AS member_id, role, email, status FROM members WHERE memberId = ? LIMIT 1', [memberId]);
+
+    if (!memberRow || String(memberRow.status || '').toUpperCase() !== 'ACTIVE') {
+      return res.status(403).json({ error: '비활성화된 계정입니다.' });
+    }
+    if (!memberQualifiesAsAdmin(memberRow, memberId)) {
+      return res.status(403).json({ error: '관리자 권한이 없습니다.' });
+    }
+
+    req.authMemberId = memberId;
+    req.authRole = String(memberRow.role || 'ADMIN').toUpperCase();
+    req.authAdminToken = token;
+    next();
+  } catch (err) {
+    logger.error('requireAdmin error:', err);
+    return res.status(500).json({ error: 'Admin auth check failed' });
+  }
+}
+
+function requireSelfOrAdmin(paramKey = 'id') {
+  return (req, res, next) => {
+    const targetId = String(req.params[paramKey] || '').trim();
+    if (isAdminRole(req.authRole)) return next();
+    if (req.authMemberId && targetId === String(req.authMemberId)) return next();
+    return res.status(403).json({ error: 'Forbidden: 본인 또는 관리자만 가능합니다.' });
+  };
 }
 
 function isRegionSuperManagerRole(role) {
@@ -3426,13 +3484,14 @@ app.get('/api/members/:id', async (req, res) => {
   try {
     const id = req.params.id;
     if (!id) return jsonFail(res, 400, 'id required');
+    const memberSelectPg = `SELECT member_id, email, name, phone, status, role, supply_manager, distribution_manager, sd_mark, memo, region_id, district_id, address, card_public, created_at, updated_at FROM members WHERE member_id::text = $1 OR email = $1 LIMIT 1`;
+    const memberSelectSqlite = `SELECT memberId, email, name, phone, status, role, supplyManager, distributionManager, sdMark, memo, regionId, districtId, address, cardPublic, createdAt, updatedAt FROM members WHERE memberId = ? OR email = ? LIMIT 1`;
     if (USE_POSTGRES) {
-      const row = await db.get('SELECT * FROM members WHERE member_id::text = $1 OR email = $1 LIMIT 1', [id]);
-      return jsonOk(res, { member: normalizeMember(row) });
-    } else {
-      const row = await db.get('SELECT * FROM members WHERE memberId = ? OR email = ? LIMIT 1', [id, id]);
+      const row = await db.get(memberSelectPg, [id]);
       return jsonOk(res, { member: normalizeMember(row) });
     }
+    const row = await db.get(memberSelectSqlite, [id, id]);
+    return jsonOk(res, { member: normalizeMember(row) });
   } catch (err) {
     logger.error('Error fetching member by id:', err);
     return jsonFail(res, 500, err.message || String(err));
@@ -3441,7 +3500,7 @@ app.get('/api/members/:id', async (req, res) => {
 
 // POST /api/members/upsert
 // POST /api/members - create new member (fails if email/phone exists)
-app.post('/api/members', async (req, res) => {
+app.post('/api/members', requireAdmin, async (req, res) => {
   try {
     const m = req.body || {};
     const now = new Date().toISOString();
@@ -3520,7 +3579,7 @@ app.delete('/api/members/:id', requireAuth, async (req, res) => {
 });
 
 // PUT /api/members/:id - upsert member by id (SSOT)
-app.put('/api/members/:id', async (req, res) => {
+app.put('/api/members/:id', requireAuth, requireSelfOrAdmin('id'), async (req, res) => {
   try {
     const id = req.params.id;
     const body = req.body || {};
@@ -3678,7 +3737,7 @@ app.put('/api/members/:id', async (req, res) => {
 });
 
 // PATCH /api/members/:id - update member by id only
-app.patch('/api/members/:id', async (req, res) => {
+app.patch('/api/members/:id', requireAuth, requireSelfOrAdmin('id'), async (req, res) => {
   try {
     const id = req.params.id;
     const updates = req.body || {};
@@ -4449,20 +4508,8 @@ app.get('/api/admin/auth/verify', async (req, res) => {
 });
 
 // GET /api/admin/members/export - 관리자 전용: 백업을 위해 모든 필드 포함
-app.get('/api/admin/members/export', async (req, res) => {
+app.get('/api/admin/members/export', requireAdmin, async (req, res) => {
   try {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    if (!token) return res.status(401).json({ error: 'Unauthorized' });
-    
-    // 관리자 세션 확인
-    const sessionQuery = USE_POSTGRES
-      ? 'SELECT * FROM sessions WHERE session_id = $1 AND status = $2'
-      : 'SELECT * FROM sessions WHERE sessionId = ? AND memberId = ? AND status = ?';
-    const sessionParams = USE_POSTGRES ? [token, 'ACTIVE'] : [token, 'ADMIN', 'ACTIVE'];
-    const session = await db.get(sessionQuery, sessionParams);
-    
-    if (!session) return res.status(401).json({ error: 'Unauthorized' });
-    
     // 백업용: password, passwordHash 포함한 모든 필드 반환
     const query = USE_POSTGRES 
       ? 'SELECT * FROM members ORDER BY created_at DESC'
@@ -4482,7 +4529,7 @@ app.get('/api/admin/members/export', async (req, res) => {
 // ============================================
 
 // PATCH /api/admin/members/:id/role — 회원 역할 변경
-app.patch('/api/admin/members/:id/role', async (req, res) => {
+app.patch('/api/admin/members/:id/role', requireAdmin, async (req, res) => {
   try {
     const token = req.headers['x-admin-token'] || req.headers.authorization?.replace('Bearer ', '');
     if (!token) return res.status(401).json({ error: '인증이 필요합니다.' });
@@ -4575,7 +4622,7 @@ app.patch('/api/admin/members/:id/role', async (req, res) => {
 });
 
 // POST /api/admin/members/:id/reset-password — 관리자 임시 비밀번호 발급
-app.post('/api/admin/members/:id/reset-password', async (req, res) => {
+app.post('/api/admin/members/:id/reset-password', requireAdmin, async (req, res) => {
   try {
     const token = req.headers['x-admin-token'] || req.headers.authorization?.replace('Bearer ', '');
     if (!token) return res.status(401).json({ error: '인증이 필요합니다.' });
@@ -4657,7 +4704,7 @@ app.post('/api/admin/members/:id/reset-password', async (req, res) => {
 });
 
 // GET /api/admin/members/:id/region-assignments — 지역관리자 배정 목록
-app.get('/api/admin/members/:id/region-assignments', async (req, res) => {
+app.get('/api/admin/members/:id/region-assignments', requireAdmin, async (req, res) => {
   try {
     const token = req.headers['x-admin-token'] || req.headers.authorization?.replace('Bearer ', '');
     if (!token) return res.status(401).json({ error: '인증이 필요합니다.' });
@@ -4683,7 +4730,7 @@ app.get('/api/admin/members/:id/region-assignments', async (req, res) => {
 });
 
 // POST /api/admin/members/:id/region-assignments — 지역 배정 추가
-app.post('/api/admin/members/:id/region-assignments', async (req, res) => {
+app.post('/api/admin/members/:id/region-assignments', requireAdmin, async (req, res) => {
   try {
     const token = req.headers['x-admin-token'] || req.headers.authorization?.replace('Bearer ', '');
     if (!token) return res.status(401).json({ error: '인증이 필요합니다.' });
@@ -4709,7 +4756,7 @@ app.post('/api/admin/members/:id/region-assignments', async (req, res) => {
 });
 
 // DELETE /api/admin/members/:id/region-assignments/:regionId — 지역 배정 제거
-app.delete('/api/admin/members/:id/region-assignments/:regionId', async (req, res) => {
+app.delete('/api/admin/members/:id/region-assignments/:regionId', requireAdmin, async (req, res) => {
   try {
     const token = req.headers['x-admin-token'] || req.headers.authorization?.replace('Bearer ', '');
     if (!token) return res.status(401).json({ error: '인증이 필요합니다.' });
@@ -4731,19 +4778,8 @@ app.delete('/api/admin/members/:id/region-assignments/:regionId', async (req, re
 });
 
 // GET /api/admin/backup - 관리자 전용: 전체 DB 백업 (주요 테이블 포함)
-app.get('/api/admin/backup', async (req, res) => {
+app.get('/api/admin/backup', requireAdmin, async (req, res) => {
   try {
-    const token = req.headers.authorization?.replace('Bearer ', '');
-    if (!token) return res.status(401).json({ error: 'Unauthorized' });
-
-    // PostgreSQL 관리자 세션은 member_id = NULL로 저장되므로 member_id 조건 제외
-    const sessionQuery = USE_POSTGRES
-      ? 'SELECT * FROM sessions WHERE session_id = $1 AND status = $2'
-      : 'SELECT * FROM sessions WHERE sessionId = ? AND memberId = ? AND status = ?';
-    const sessionParams = USE_POSTGRES ? [token, 'ACTIVE'] : [token, 'ADMIN', 'ACTIVE'];
-    const session = await db.get(sessionQuery, sessionParams);
-    if (!session) return res.status(401).json({ error: 'Unauthorized' });
-
     const tables = {};
     const q = async (sql, params = []) => USE_POSTGRES ? await db.query(sql, params) : await db.query(sql, params);
 
@@ -4798,7 +4834,7 @@ app.get('/api/admin/backup', async (req, res) => {
 
 // ────────── 관리자 상점 승인 API ──────────
 // PATCH /api/admin/shops/:id/approve - 상점 승인
-app.patch('/api/admin/shops/:id/approve', async (req, res) => {
+app.patch('/api/admin/shops/:id/approve', requireAdmin, async (req, res) => {
   try {
     const token = req.headers.authorization?.replace('Bearer ', '');
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
@@ -4827,7 +4863,7 @@ app.patch('/api/admin/shops/:id/approve', async (req, res) => {
 });
 
 // PATCH /api/admin/shops/:id/reject - 상점 거부
-app.patch('/api/admin/shops/:id/reject', async (req, res) => {
+app.patch('/api/admin/shops/:id/reject', requireAdmin, async (req, res) => {
   try {
     const token = req.headers.authorization?.replace('Bearer ', '');
     if (!token) return res.status(401).json({ error: 'Unauthorized' });
@@ -5109,7 +5145,7 @@ app.post('/api/admin/backup/verify', async (req, res) => {
 });
 
 // POST /api/admin/restore - 백업 전체 복원 (UPSERT)
-app.post('/api/admin/restore', async (req, res) => {
+app.post('/api/admin/restore', requireAdmin, async (req, res) => {
   // try 밖에 선언: catch/finally에서도 접근 보장
   let _pgc = null;
   const _oq = db.query, _or = db.run, _og = db.get; // 원본 항상 캡처
@@ -6624,7 +6660,7 @@ app.delete('/api/admin/regions/:regionId/festivals/:festivalId/comments/:comment
 // ── Admin region-news endpoints (no x-admin-token required, gated by frontend admin check) ──
 
 // GET /api/admin/region-news
-app.get('/api/admin/region-news', async (req, res) => {
+app.get('/api/admin/region-news', requireAdmin, async (req, res) => {
   try {
     const regionId = req.query.regionId || null;
     const limit = Math.min(500, parseInt(req.query.limit) || 200);
@@ -6648,7 +6684,7 @@ app.get('/api/admin/region-news', async (req, res) => {
 });
 
 // POST /api/admin/region-news
-app.post('/api/admin/region-news', async (req, res) => {
+app.post('/api/admin/region-news', requireAdmin, async (req, res) => {
   try {
     const b = req.body || {};
     if (!b.regionId) return jsonFail(res, 400, 'regionId required');
@@ -6672,7 +6708,7 @@ app.post('/api/admin/region-news', async (req, res) => {
 });
 
 // PATCH /api/admin/region-news/:newsId
-app.patch('/api/admin/region-news/:newsId', async (req, res) => {
+app.patch('/api/admin/region-news/:newsId', requireAdmin, async (req, res) => {
   try {
     const { newsId } = req.params;
     const b = req.body || {};
@@ -6702,7 +6738,7 @@ app.patch('/api/admin/region-news/:newsId', async (req, res) => {
 });
 
 // DELETE /api/admin/region-news/:newsId
-app.delete('/api/admin/region-news/:newsId', async (req, res) => {
+app.delete('/api/admin/region-news/:newsId', requireAdmin, async (req, res) => {
   try {
     const { newsId } = req.params;
     await db.run(`DELETE FROM region_news WHERE news_id = $1`, [newsId]);
@@ -7755,7 +7791,7 @@ app.get('/api/shops/:shopId/voucher-balance', async (req, res) => {
 });
 
 // POST /api/admin/vouchers/distribute - 상점 → 회원 배분
-app.post('/api/admin/vouchers/distribute', async (req, res) => {
+app.post('/api/admin/vouchers/distribute', requireAdmin, async (req, res) => {
   try {
     const { shopId, memberId, typeCode, amount, description, adminId } = req.body;
     if (!shopId || !memberId || !typeCode || !amount) return res.status(400).json({ error: '필수 파라미터 누락' });
@@ -7852,7 +7888,7 @@ app.get('/api/vouchers/:memberId/history', async (req, res) => {
 });
 
 // POST /api/vouchers/issue - 관리자 수동 지급 (회원 또는 상점 대상)
-app.post('/api/vouchers/issue', async (req, res) => {
+app.post('/api/vouchers/issue', requireAdmin, async (req, res) => {
   try {
     const { memberId, typeCode, amount, description, adminId, source, referenceId, targetType, shopId } = req.body;
     if (!memberId || !typeCode || !amount) return res.status(400).json({ error: 'memberId, typeCode, amount required' });
@@ -7907,10 +7943,13 @@ app.post('/api/vouchers/issue', async (req, res) => {
 });
 
 // POST /api/vouchers/use - 상점에서 사용 차감
-app.post('/api/vouchers/use', async (req, res) => {
+app.post('/api/vouchers/use', requireAuth, async (req, res) => {
   try {
     const { memberId, typeCode, amount, description, shopId } = req.body;
     if (!memberId || !typeCode || !amount) return res.status(400).json({ error: 'memberId, typeCode, amount required' });
+    if (!isAdminRole(req.authRole) && String(memberId) !== String(req.authMemberId)) {
+      return res.status(403).json({ error: 'Forbidden: 본인 바우처만 사용할 수 있습니다.' });
+    }
     // 잔액 확인
     const balRows = USE_POSTGRES
       ? await db.query(`SELECT COALESCE(SUM(amount),0) as bal FROM voucher_ledger WHERE member_id=$1 AND type_code=$2 AND status='active'`, [String(memberId), typeCode])
@@ -8067,7 +8106,7 @@ app.post('/api/vouchers/transfer', requireAuth, async (req, res) => {
 // 지원 쿼리: page, pageSize, limit(레거시), typeCode, memberId, shopId,
 //            targetType(member|shop), sign(plus|minus), source, name(통합 검색),
 //            from(YYYY-MM-DD), to(YYYY-MM-DD), sortField, sortDir(asc|desc)
-app.get('/api/admin/vouchers/logs', async (req, res) => {
+app.get('/api/admin/vouchers/logs', requireAdmin, async (req, res) => {
   try {
     const page     = Math.max(1, parseInt(req.query.page) || 1);
     const pageSize = parseInt(req.query.pageSize) || parseInt(req.query.limit) || 20;
@@ -8195,7 +8234,7 @@ app.get('/api/admin/vouchers/logs', async (req, res) => {
 
 // GET /api/admin/vouchers/balances - 회원/상점별 잔액 현황 (집계)
 // 쿼리: targetType(member|shop), name, excludeZero(1), page, pageSize, typeCode
-app.get('/api/admin/vouchers/balances', async (req, res) => {
+app.get('/api/admin/vouchers/balances', requireAdmin, async (req, res) => {
   try {
     const targetType  = req.query.targetType || 'member'; // 'member' | 'shop'
     const name        = req.query.name || null;
@@ -9147,7 +9186,7 @@ app.post('/api/shops/:shopId/payout-requests', async (req, res) => {
 // ============================================
 
 // GET /api/admin/payout-requests - 전체 지급요청 조회 (Admin 전용)
-app.get('/api/admin/payout-requests', async (req, res) => {
+app.get('/api/admin/payout-requests', requireAdmin, async (req, res) => {
   try {
     const { status } = req.query;
     
@@ -9187,7 +9226,7 @@ app.get('/api/admin/payout-requests', async (req, res) => {
 });
 
 // PUT /api/admin/payout-requests/:id/complete - 지급 완료 처리 (Issue 2(B-2): return PAID status)
-app.put('/api/admin/payout-requests/:id/complete', async (req, res) => {
+app.put('/api/admin/payout-requests/:id/complete', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { adminId, adminNote } = req.body || {};
@@ -9232,7 +9271,7 @@ app.put('/api/admin/payout-requests/:id/complete', async (req, res) => {
 // ============================================
 
 // GET /api/admin/points/transactions - 포인트 이력 기본 로딩 (Issue 3-A)
-app.get('/api/admin/points/transactions', async (req, res) => {
+app.get('/api/admin/points/transactions', requireAdmin, async (req, res) => {
   try {
     const { memberId, limit = 100, offset = 0 } = req.query;
     
@@ -16668,7 +16707,7 @@ app.get('/api/messages', async (req, res) => {
          ORDER BY created_at ASC`,
         [memberId, withId]
       );
-      messages = result.rows;
+      messages = Array.isArray(result) ? result : [];
     } else {
       const rows = await db.query(
         `SELECT chatId as id, fromUserId as "from", toUserId as "to", text, createdAt
@@ -16749,7 +16788,7 @@ app.get('/api/chats', async (req, res) => {
          ORDER BY created_at ASC`,
         [user1, user2]
       );
-      messages = result.rows;
+      messages = Array.isArray(result) ? result : [];
     } else {
       const rows = await db.query(
         `SELECT chatId as id, fromUserId as "from", toUserId as "to", 
@@ -16845,7 +16884,7 @@ app.get('/api/chats/conversations/:userId', async (req, res) => {
         ORDER BY "createdAt" DESC`,
         [userId]
       );
-      conversations = result.rows;
+      conversations = Array.isArray(result) ? result : [];
     } else {
       // SQLite version
       const rows = await db.query(
@@ -17815,7 +17854,10 @@ app.post('/api/supply-requests', async (req, res) => {
           : await db.get('SELECT name FROM members WHERE memberId = ?', [managerId]);
         managerName = managerRow?.name || String(managerId);
       }
-    } catch (_) { /* 조회 실패 시 차단하지 않고 통과 */ }
+    } catch (supplyErr) {
+      logger.error('Supply validation failed:', supplyErr);
+      return res.status(503).json({ error: '상품 정보를 확인할 수 없습니다. 잠시 후 다시 시도해주세요.' });
+    }
     const receiveMethod = receiveMethodRaw ? String(receiveMethodRaw).trim().toLowerCase() : null;
     const paymentReferenceId = paymentReferenceIdRaw ? String(paymentReferenceIdRaw).trim() : null;
     const paymentAmount = Math.max(0, Math.trunc(Number(paymentAmountRaw || 0)));
@@ -17857,14 +17899,6 @@ app.post('/api/supply-requests', async (req, res) => {
         return res.status(409).json({ error: '이미 처리된 유통 주문입니다.' });
       }
 
-      const balanceQuery = USE_POSTGRES
-        ? "SELECT COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 0 ELSE amount END), 0) as balance FROM point_ledger WHERE member_id = $1"
-        : "SELECT COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 0 ELSE amount END), 0) as balance FROM point_ledger WHERE memberId = ?";
-      const balanceRow = await db.get(balanceQuery, [authMemberId]);
-      const currentBalance = Number(balanceRow?.balance || 0);
-      if (currentBalance < paymentAmount) {
-        return res.status(400).json({ error: '포인트 잔액이 부족합니다.', required: paymentAmount, available: currentBalance });
-      }
     }
 
     const now = new Date().toISOString();
@@ -17873,6 +17907,12 @@ app.post('/api/supply-requests', async (req, res) => {
       await db.run('BEGIN');
       try {
         if (isPaidDistributionOrder) {
+          await lockMemberPointLedger(requesterId);
+          const lockedBalance = await getMemberPointBalance(requesterId);
+          if (lockedBalance < paymentAmount) {
+            await db.run('ROLLBACK');
+            return res.status(400).json({ error: '포인트 잔액이 부족합니다.', required: paymentAmount, available: lockedBalance });
+          }
           await db.run(
             `INSERT INTO point_ledger(member_id, amount, type, description, reference_id, reference_type, status, created_at)
              VALUES($1, $2, $3, $4, $5, $6, $7, $8)`,
@@ -17926,6 +17966,15 @@ app.post('/api/supply-requests', async (req, res) => {
       await db.run('BEGIN');
       try {
         if (isPaidDistributionOrder) {
+          const balanceRow = await db.get(
+            "SELECT COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 0 ELSE amount END), 0) as balance FROM point_ledger WHERE memberId = ?",
+            [requesterId]
+          );
+          const lockedBalance = Number(balanceRow?.balance || 0);
+          if (lockedBalance < paymentAmount) {
+            await db.run('ROLLBACK');
+            return res.status(400).json({ error: '포인트 잔액이 부족합니다.', required: paymentAmount, available: lockedBalance });
+          }
           await db.run(
             `INSERT INTO point_ledger(memberId, amount, type, description, referenceId, referenceType, status, createdAt)
              VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -18360,7 +18409,7 @@ app.post('/api/dist/wallet/withdraw', async (req, res) => {
 });
 
 // GET /api/admin/dist-payouts - 관리자: 출금 요청 목록
-app.get('/api/admin/dist-payouts', async (req, res) => {
+app.get('/api/admin/dist-payouts', requireAdmin, async (req, res) => {
   try {
     const rows = USE_POSTGRES
       ? await db.all(`SELECT * FROM dist_payout_requests ORDER BY requested_at DESC`)
@@ -18373,7 +18422,7 @@ app.get('/api/admin/dist-payouts', async (req, res) => {
 });
 
 // PATCH /api/admin/dist-payouts/:id - 관리자: 출금 승인/거절/지급완료
-app.patch('/api/admin/dist-payouts/:id', async (req, res) => {
+app.patch('/api/admin/dist-payouts/:id', requireAdmin, async (req, res) => {
   try {
     const { id } = req.params;
     const { status, rejectReason } = req.body || {};
@@ -18587,7 +18636,7 @@ app.get('/api/supply-requests', async (req, res) => {
 });
 
 // PATCH /api/supply-requests/:id - 보급지원 신청 상태 변경
-app.patch('/api/supply-requests/:id', async (req, res) => {
+app.patch('/api/supply-requests/:id', requireAuth, async (req, res) => {
   try {
     const id = req.params.id;
     const {
@@ -18601,6 +18650,26 @@ app.patch('/api/supply-requests/:id', async (req, res) => {
 
     if (!status && !orderStatus && !buyerConfirmed && !requestType) {
       return res.status(400).json({ error: 'status or orderStatus or buyerConfirmed is required' });
+    }
+
+    const existingRequest = USE_POSTGRES
+      ? await db.get('SELECT requester_id, supply_item_id FROM supply_requests WHERE request_id = $1', [id])
+      : await db.get('SELECT requesterId, supplyItemId FROM supply_requests WHERE requestId = ?', [id]);
+    if (!existingRequest) {
+      return res.status(404).json({ error: 'request not found' });
+    }
+    const requesterId = String(existingRequest.requester_id || existingRequest.requesterId || '').trim();
+    let allowed = isAdminRole(req.authRole) || (requesterId && requesterId === String(req.authMemberId));
+    if (!allowed && (existingRequest.supply_item_id || existingRequest.supplyItemId)) {
+      const supplyId = existingRequest.supply_item_id || existingRequest.supplyItemId;
+      const supplyRow = USE_POSTGRES
+        ? await db.get('SELECT created_by FROM supplies WHERE supply_id = $1', [supplyId])
+        : await db.get('SELECT createdBy FROM supplies WHERE supplyId = ?', [supplyId]);
+      const managerId = String(supplyRow?.created_by || supplyRow?.createdBy || '').trim();
+      if (managerId && managerId === String(req.authMemberId)) allowed = true;
+    }
+    if (!allowed) {
+      return res.status(403).json({ error: 'Forbidden: 신청자·담당자·관리자만 변경할 수 있습니다.' });
     }
     
     const now = new Date().toISOString();

@@ -117,10 +117,26 @@ pm2 restart smi
 
 ---
 
-## 6. 알려진 이슈 · 후속 작업 제안
+## 6. 보안·안정화 패치 (2026-06-03 추가 커밋)
 
-1. **공유방송 목록 (`Broadcast.jsx`)**  
-   과거 `PageHeader` import 누락 시 빈 화면 가능. 증상 있으면 `PageHeader` import 추가.
+| 항목 | 내용 |
+|------|------|
+| **requireAdmin** | 백업·출금·바우처·지역뉴스·상점승인 등 `/api/admin/*` 민감 API에 관리자 세션+role 검증 |
+| **회원 API** | `POST/PUT/PATCH /api/members` 제한, 응답에서 비밀번호 필드 제거, `GET :id` 안전 컬럼만 |
+| **PG 채팅** | `result.rows` → 배열 직접 사용 (채팅 목록 빈 화면 수정) |
+| **유통 주문** | 품절 조회 실패 시 503, 유료 결제 잔액 검증을 트랜잭션·잠금 안으로 이동 |
+| **supply PATCH** | 로그인 필수 + 신청자·보급담당·관리자만 상태 변경 |
+| **관리자 UI** | `AdminContents` 배너 드래그·미리보기·공지 팝업 검증 보강 |
+| **env** | `chatService`/`friendService` — `VITE_API_BASE` \|\| `VITE_API_URL` 통일 |
+
+**배포 시:** 관리자 화면 API는 `sessionStorage.su_admin_token` (Bearer) 필수. 일반 회원 토큰만으로는 403.
+
+---
+
+## 7. 알려진 이슈 · 후속 작업 제안
+
+1. **공유방송 목록 (`src/pages/broadcast/Broadcast.jsx`)**  
+   `PageHeader` import 포함됨. 빈 화면 시 `videoUrl`/방송 데이터·네트워크 탭 확인.
 
 2. **유통 쇼핑몰 UI**  
    쿠팡형 UI(`distribution-market.css`)는 원복됨. 재적용 시 별도 브랜치 권장.
@@ -136,7 +152,7 @@ pm2 restart smi
 
 ---
 
-## 7. 테스트 체크리스트 (배포 전)
+## 8. 테스트 체크리스트 (배포 전)
 
 - [ ] 로그인 → 마이오피스 → 유통 상품 품절 → 유통지원 상세에서 구매 불가
 - [ ] 판매자 출금 요청 → 관리자 출금 탭에 노출 → 승인/지급 후 `available` 갱신
@@ -146,7 +162,10 @@ pm2 restart smi
 
 ---
 
-## 8. 문의·참고 문서
+- [ ] 비로그인 `GET /api/admin/dist-payouts` → 401/403
+- [ ] PostgreSQL 환경에서 채팅 메시지 목록 조회
+
+## 9. 문의·참고 문서
 
 - `DELIVERY_GUIDE.md` — 배포 패키지 구성
 - `DEPLOYMENT_CHECKLIST.md` — 운영 체크

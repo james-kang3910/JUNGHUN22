@@ -29,6 +29,14 @@ function getTodayLocalYmd() {
   return `${year}-${month}-${day}`;
 }
 
+function resolveUploadPreviewUrl(url) {
+  const raw = String(url || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw) || raw.startsWith('data:')) return raw;
+  const base = String(import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_URL || '').replace(/\/+$/, '').replace(/\/api$/, '');
+  return `${base}${raw}`;
+}
+
 export default function AdminContents() {
   const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState("notices"); // notices | broadcasts | banners | supplies | boards | regionNews
@@ -282,20 +290,10 @@ export default function AdminContents() {
     e.stopPropagation();
   };
 
-  const handleDrop = async (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setIsDragging(false);
-    
-    const files = e.dataTransfer.files;
-    if (files && files.length > 0) {
-      const imageUrl = await handleImageUpload(files[0]);
-      if (imageUrl && editingItem) {
-        // 업로드 성공 시 편집 중인 아이템에 imageUrl 설정
-        const updated = { ...editingItem, imageUrl };
-        setEditingItem(updated);
-      }
-    }
+  const handleBannerImageReady = (imageUrl, onChange) => {
+    if (!imageUrl) return;
+    if (typeof onChange === 'function') onChange(imageUrl);
+    setPreviewImage(imageUrl);
   };
 
   // 저장
@@ -323,6 +321,13 @@ export default function AdminContents() {
       const noticeScope = String(data.scope || 'ALL').toUpperCase() === 'REGION' ? 'REGION' : 'ALL';
       processedData.scope = noticeScope;
       processedData.isPopup = !!data.isPopup;
+      processedData.isPublic = data.isPublic !== false;
+      processedData.status = String(data.status || 'ACTIVE').trim() || 'ACTIVE';
+      processedData.imageUrl = String(data.imageUrl || '').trim() || null;
+      if (processedData.isPopup && !processedData.isPublic) {
+        setToast({ open: true, message: '메인 팝업은 공개 공지에만 노출됩니다. 공개 여부를 켜주세요.', type: 'error' });
+        return;
+      }
       if (noticeScope === 'REGION') {
         const selectedRegionId = String(data.regionId || '').trim();
         if (!selectedRegionId) {
@@ -368,11 +373,11 @@ export default function AdminContents() {
           setToast({ open: true, message: "노출 시작일과 종료일을 모두 입력해주세요.", type: "error" });
           return;
         }
-        if (startDate && startDate < todayYmd) {
+        if (!editingItem && startDate && startDate < todayYmd) {
           setToast({ open: true, message: "노출 시작일은 오늘 이전으로 설정할 수 없습니다.", type: "error" });
           return;
         }
-        if (endDate && endDate < todayYmd) {
+        if (!editingItem && endDate && endDate < todayYmd) {
           setToast({ open: true, message: "노출 종료일은 오늘 이전으로 설정할 수 없습니다.", type: "error" });
           return;
         }
@@ -407,6 +412,13 @@ export default function AdminContents() {
           return;
         }
       } else if (activeTab === 'broadcasts') {
+        const videoUrl = String(processedData.videoUrl || '').trim();
+        if (!videoUrl) {
+          setToast({ open: true, message: '영상 URL을 입력해주세요.', type: 'error' });
+          return;
+        }
+        processedData.videoUrl = videoUrl;
+        processedData.isPublic = processedData.isPublic !== false;
         if (editingItem) {
           const id = editingItem.id;
           const res = await storageAdapter.updateBroadcast(id, processedData);
@@ -709,7 +721,15 @@ export default function AdminContents() {
                 onDragEnter={handleDragEnter}
                 onDragOver={handleDragOver}
                 onDragLeave={handleDragLeave}
-                onDrop={handleDrop}
+                onDrop={async (e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  setIsDragging(false);
+                  const file = e.dataTransfer?.files?.[0];
+                  if (!file) return;
+                  const imageUrl = await handleImageUpload(file);
+                  handleBannerImageReady(imageUrl, onChange);
+                }}
                 style={{
                   border: `2px dashed ${isDragging ? '#a855f7' : 'rgba(255,255,255,0.2)'}`,
                   borderRadius: 12,
@@ -728,10 +748,7 @@ export default function AdminContents() {
                     const file = e.target.files?.[0];
                     if (file) {
                       const imageUrl = await handleImageUpload(file);
-                      if (imageUrl) {
-                        onChange(imageUrl);
-                        setPreviewImage(imageUrl);
-                      }
+                      handleBannerImageReady(imageUrl, onChange);
                     }
                   }}
                 />
@@ -769,7 +786,7 @@ export default function AdminContents() {
                 <div style={{ fontSize: 12, opacity: 0.72, marginBottom: 6 }}>미리보기</div>
                 {value || previewImage ? (
                   <img
-                    src={value || previewImage}
+                    src={resolveUploadPreviewUrl(value || previewImage)}
                     alt="배너 미리보기"
                     style={{
                       width: '100%',
