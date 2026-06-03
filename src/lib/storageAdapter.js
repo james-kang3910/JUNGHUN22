@@ -219,6 +219,28 @@ export async function setMemberRole(memberId, role) {
   }
 }
 
+/** 관리자 임시 비밀번호 발급 (1회 표시) */
+export async function resetMemberPassword(memberId) {
+  try {
+    return await apiPost(`/api/admin/members/${encodeURIComponent(memberId)}/reset-password`, {}, {
+      headers: _adminAuthHeader(),
+    });
+  } catch (error) {
+    console.error('[resetMemberPassword] Error:', error.message);
+    throw error;
+  }
+}
+
+/** 비밀번호 변경 (임시 비밀번호 교체 포함) */
+export async function changePassword({ email, currentPassword, newPassword }) {
+  const res = await fetchWithRetry(`${API_BASE}/api/auth/change-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, currentPassword, newPassword }),
+  });
+  return res;
+}
+
 /** 지역관리자 배정 목록 조회 */
 export async function getMemberRegionAssignments(memberId) {
   try {
@@ -395,6 +417,12 @@ function getEffectiveUserId() {
     console.warn('[storageAdapter] Failed to get effectiveUserId:', e);
   }
   return null;
+}
+
+function requireLoggedInMemberId() {
+  const memberId = getEffectiveUserId();
+  if (!memberId) throw new Error('로그인이 필요합니다.');
+  return memberId;
 }
 
 async function fetchWithRetry(url, options, maxRetries) {
@@ -705,7 +733,6 @@ export async function payWithQrPayload(qrPayload, amount, memberId) {
   if (!qrPayload) throw new Error('payWithQrPayload: qrPayload required');
   const amt = Number(amount);
   if (!Number.isFinite(amt) || amt <= 0) throw new Error('payWithQrPayload: valid amount required');
-  if (!memberId) throw new Error('payWithQrPayload: memberId required');
 
   const url = `${API_BASE}/api/payments/qr`;
   const payload = { qrPayload, amount: Math.trunc(amt) };
@@ -714,7 +741,8 @@ export async function payWithQrPayload(qrPayload, amount, memberId) {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'x-member-id': memberId,
+        ..._sessionAuthHeader(),
+        ...(memberId ? { 'x-member-id': String(memberId) } : {}),
       },
       body: JSON.stringify(payload),
     });
@@ -956,12 +984,12 @@ export async function setRegionPublic(regionId, isPublic) {
 /**
  * 배너 목록 조회 (서버 우선, 로컬 fallback)
  */
-export async function getBanners(regionId = null) {
+export async function getBanners(regionId = null, options = {}) {
   try {
-    // 서버 API 호출
-    const url = regionId 
-      ? `${API_BASE}/api/banners?regionId=${encodeURIComponent(regionId)}&activeOnly=true`
-      : `${API_BASE}/api/banners?activeOnly=true`;
+    const params = new URLSearchParams({ activeOnly: 'true' });
+    if (regionId) params.set('regionId', String(regionId));
+    if (options.type) params.set('type', String(options.type));
+    const url = `${API_BASE}/api/banners?${params.toString()}`;
     return await fetchWithRetry(url, { method: 'GET' });
   } catch (error) {
     console.warn('Failed to fetch banners from server, using local data:', error);
@@ -969,6 +997,12 @@ export async function getBanners(regionId = null) {
     const { getPublicBanners } = await import('./adminStore');
     return getPublicBanners(regionId);
   }
+}
+
+/** 지역포털 하단 배너 조회 */
+export async function getRegionPortalBanners(regionId) {
+  if (!regionId) return [];
+  return getBanners(regionId, { type: 'region_portal' });
 }
 
 /**
@@ -1077,7 +1111,7 @@ export async function getReviews(shopId) {
   });
 }
 
-export async function postReview(shopId, { content, rating, authorName }, memberId) {
+export async function postReview(shopId, { content, rating, authorName, images }, memberId) {
   if (!memberId) {
     throw new Error('memberId is required for review submission');
   }
@@ -1094,17 +1128,44 @@ export async function postReview(shopId, { content, rating, authorName }, member
       'Content-Type': 'application/json',
       'x-member-id': memberId,
     },
-    body: JSON.stringify({ content, rating, authorName }),
+    body: JSON.stringify({
+      content,
+      rating,
+      authorName,
+      images: Array.isArray(images) ? images.filter(Boolean).slice(0, 5) : [],
+    }),
+  });
+}
+
+export async function updateReview(shopId, reviewId, { content, rating, images }) {
+  requireLoggedInMemberId();
+  if (!content || !String(content).trim()) {
+    throw new Error('content is required');
+  }
+  if (!rating || rating < 1 || rating > 5) {
+    throw new Error('rating must be between 1 and 5');
+  }
+
+  return fetchWithRetry(`${API_BASE}/api/shops/${encodeURIComponent(shopId)}/reviews/${encodeURIComponent(reviewId)}`, {
+    method: 'PATCH',
+    headers: {
+      'Content-Type': 'application/json',
+      ..._sessionAuthHeader(),
+    },
+    body: JSON.stringify({
+      content: String(content).trim(),
+      rating,
+      images: Array.isArray(images) ? images.filter(Boolean).slice(0, 5) : [],
+    }),
   });
 }
 
 export async function deleteReview(shopId, reviewId) {
-  const token = window.__SU_SESSION__?.token || '';
-  if (!token) throw new Error('로그인이 필요합니다.');
+  requireLoggedInMemberId();
   return fetchWithRetry(`${API_BASE}/api/shops/${encodeURIComponent(shopId)}/reviews/${encodeURIComponent(reviewId)}`, {
     method: 'DELETE',
     headers: {
-      'Authorization': `Bearer ${token}`,
+      ..._sessionAuthHeader(),
     },
   });
 }
@@ -1446,6 +1507,7 @@ export async function fetchSupplyById(supplyId) {
 export async function getPointBalance(memberId) {
   return fetchWithRetry(`${API_BASE}/api/points/${encodeURIComponent(memberId)}/balance`, {
     method: 'GET',
+    headers: _sessionAuthHeader(),
   });
 }
 
@@ -1463,7 +1525,7 @@ export async function getPointHistory(memberId, filters = {}) {
     ? `${API_BASE}/api/points/${encodeURIComponent(memberId)}/history?${queryParams}`
     : `${API_BASE}/api/points/${encodeURIComponent(memberId)}/history`;
   
-  return fetchWithRetry(url, { method: 'GET' });
+  return fetchWithRetry(url, { method: 'GET', headers: _sessionAuthHeader() });
 }
 
 /**
@@ -1491,9 +1553,13 @@ export async function grantPoints(memberId, amount, type = 'ADMIN', description 
  * API: POST /api/points/admin/cancel/:transactionId
  */
 export async function cancelPointTransaction(transactionId) {
+  const token = window.__SU_SESSION__?.token || '';
   return fetchWithRetry(`${API_BASE}/api/points/admin/cancel/${encodeURIComponent(transactionId)}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
   });
 }
 
@@ -1501,14 +1567,7 @@ export async function cancelPointTransaction(transactionId) {
  * 유저: 포인트 결제 (QR 코드 결제)
  */
 export async function payWithPoints(storeId, amount, memberId, clientNonce = null) {
-  return fetchWithRetry(`${API_BASE}/api/points/pay`, {
-    method: 'POST',
-    headers: { 
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${memberId}`
-    },
-    body: JSON.stringify({ storeId, amount, clientNonce }),
-  });
+  return payWithSessionPoints(storeId, amount, clientNonce);
 }
 
 /**
@@ -1847,7 +1906,7 @@ export async function updateSupplyRequest(requestId, updates = {}) {
 
 export async function getDistWallet() {
   try {
-    return await apiGet('/api/dist/wallet');
+    return await apiGet('/api/dist/wallet', { headers: _sessionAuthHeader() });
   } catch (error) {
     console.error('[getDistWallet] Error:', error.message);
     throw error;
@@ -1856,7 +1915,9 @@ export async function getDistWallet() {
 
 export async function requestDistWithdraw({ amount, bankName, accountNumber, depositorName, memo }) {
   try {
-    return await apiPost('/api/dist/wallet/withdraw', { amount, bankName, accountNumber, depositorName, memo });
+    return await apiPost('/api/dist/wallet/withdraw', { amount, bankName, accountNumber, depositorName, memo }, {
+      headers: _sessionAuthHeader(),
+    });
   } catch (error) {
     console.error('[requestDistWithdraw] Error:', error.message);
     throw error;
@@ -2131,7 +2192,11 @@ export async function fetchCardBySlug(slug) {
 export async function saveCard(memberId, cardData) {
   const res = await fetch(`${API_BASE}/api/members/${encodeURIComponent(memberId)}/card`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json', 'x-member-id': String(memberId) },
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-member-id': String(memberId),
+    },
     body: JSON.stringify(cardData),
   });
   return checkStatus(res);
@@ -3018,6 +3083,14 @@ export async function getRegionHeroImages(regionId) {
 }
 export async function getRegionIntro(regionId) {
   return fetchWithRetry(`${API_BASE}/api/regions/${encodeURIComponent(regionId)}/intro`, { method: 'GET' });
+}
+export async function searchRegionContent(regionId, query) {
+  const q = String(query || '').trim();
+  if (!q) return { results: [], query: q, regionId };
+  return fetchWithRetry(
+    `${API_BASE}/api/regions/${encodeURIComponent(regionId)}/search?q=${encodeURIComponent(q)}`,
+    { method: 'GET' }
+  );
 }
 export async function updateRegionIntro(regionId, data) {
   return fetchWithRetry(`${API_BASE}/api/admin/regions/${encodeURIComponent(regionId)}/intro`, {

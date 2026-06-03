@@ -7,6 +7,17 @@
 
 import { getNotices } from './storageAdapter.js';
 
+const HIDDEN_PUBLIC_AUTHOR = '관리자';
+
+/** 사용자 화면에서 작성자/업로더 표시 — 기본값 "관리자"는 숨김 */
+export function resolvePublicAuthorName(...values) {
+  for (const value of values) {
+    const name = String(value || '').trim();
+    if (name && name !== HIDDEN_PUBLIC_AUTHOR) return name;
+  }
+  return '';
+}
+
 /**
  * 지역별 공지사항 조회
  * @param {string} regionId - 지역 ID

@@ -123,6 +123,11 @@ export default function AdminMembers() {
   // Toast 상태
   const [toast, setToast] = useState({ open: false, message: "", type: "success" });
 
+  // 임시 비밀번호 발급
+  const [resetPwConfirmOpen, setResetPwConfirmOpen] = useState(false);
+  const [resetPwLoading, setResetPwLoading] = useState(false);
+  const [tempPwResult, setTempPwResult] = useState(null);
+
   useEffect(() => {
     if (!isAdminAuthenticatedLocal()) {
       navigate("/admin/login", { replace: true });
@@ -398,6 +403,36 @@ export default function AdminMembers() {
         loadData();
         setSelectedUser({ ...selectedUser, memo: memoValue });
       }
+    }
+  };
+
+  const handleResetPassword = async () => {
+    const memberId = selectedUser?.memberId || selectedUser?.id;
+    if (!memberId) {
+      setToast({ open: true, message: "회원 ID가 없습니다.", type: "error" });
+      return;
+    }
+    setResetPwLoading(true);
+    try {
+      const result = await storageAdapter.resetMemberPassword(memberId);
+      setTempPwResult(result);
+      setResetPwConfirmOpen(false);
+      setToast({ open: true, message: "임시 비밀번호가 발급되었습니다.", type: "success" });
+    } catch (err) {
+      setToast({ open: true, message: err?.message || "임시 비밀번호 발급에 실패했습니다.", type: "error" });
+      setResetPwConfirmOpen(false);
+    } finally {
+      setResetPwLoading(false);
+    }
+  };
+
+  const copyTempPassword = async () => {
+    if (!tempPwResult?.temporaryPassword) return;
+    try {
+      await navigator.clipboard.writeText(tempPwResult.temporaryPassword);
+      setToast({ open: true, message: "임시 비밀번호가 복사되었습니다.", type: "success" });
+    } catch {
+      setToast({ open: true, message: "복사에 실패했습니다. 직접 전달해주세요.", type: "error" });
     }
   };
 
@@ -756,6 +791,33 @@ export default function AdminMembers() {
               </div>
             </div>
 
+            {selectedUser.role !== ROLES.WEBSITE_ADMIN && (
+              <div style={{ marginBottom: 20, padding: "12px 14px", background: "rgba(245,158,11,0.08)", borderRadius: 10, border: "1px solid rgba(245,158,11,0.25)" }}>
+                <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 8, color: "#fbbf24" }}>🔑 비밀번호</div>
+                <p style={{ fontSize: 12, opacity: 0.7, margin: "0 0 10px", lineHeight: 1.5 }}>
+                  임시 비밀번호를 발급하면 기존 비밀번호는 사용할 수 없습니다. 회원에게 전화/SMS로 전달한 뒤, 로그인 시 새 비밀번호를 설정하도록 안내해주세요.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => setResetPwConfirmOpen(true)}
+                  disabled={resetPwLoading}
+                  style={{
+                    padding: "8px 16px",
+                    borderRadius: 6,
+                    border: "none",
+                    background: "rgba(245,158,11,0.85)",
+                    color: "#fff",
+                    fontSize: 13,
+                    fontWeight: 600,
+                    cursor: resetPwLoading ? "wait" : "pointer",
+                    opacity: resetPwLoading ? 0.7 : 1,
+                  }}
+                >
+                  {resetPwLoading ? "발급 중..." : "🔑 임시 비밀번호 발급"}
+                </button>
+              </div>
+            )}
+
             {/* ── 회원 정보 수정 섹션 ── */}
             <div style={{ marginBottom: 20, background: "rgba(255,255,255,0.04)", borderRadius: 10, padding: "14px 16px", border: "1px solid rgba(255,255,255,0.08)" }}>
               <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 12, color: "#34d399" }}>
@@ -1065,6 +1127,97 @@ export default function AdminMembers() {
         onConfirm={handleClearAllUsers}
         onCancel={() => setClearConfirmOpen(false)}
       />
+
+      {/* Reset Password Confirm */}
+      <ConfirmDialog
+        open={resetPwConfirmOpen}
+        title="임시 비밀번호 발급"
+        message={
+          selectedUser
+            ? `${selectedUser.name || selectedUser.nickname || selectedUser.email || "회원"}에게 임시 비밀번호를 발급하시겠습니까?\n\n기존 비밀번호는 즉시 사용할 수 없게 되며, 모든 로그인 세션이 종료됩니다.`
+            : ""
+        }
+        confirmText="발급"
+        confirmColor="#f59e0b"
+        onConfirm={handleResetPassword}
+        onCancel={() => setResetPwConfirmOpen(false)}
+      />
+
+      {/* Temp Password Result Modal */}
+      {tempPwResult && (
+        <div style={modalOverlayStyle} onClick={() => setTempPwResult(null)}>
+          <div style={{ ...modalStyle, maxWidth: 420 }} onClick={(e) => e.stopPropagation()}>
+            <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 16 }}>
+              <h2 style={{ fontSize: 18, fontWeight: 700, margin: 0 }}>🔑 임시 비밀번호</h2>
+              <button
+                onClick={() => setTempPwResult(null)}
+                style={{ background: "none", border: "none", color: "#fff", fontSize: 20, cursor: "pointer" }}
+              >
+                ✕
+              </button>
+            </div>
+            <p style={{ fontSize: 13, opacity: 0.75, lineHeight: 1.6, margin: "0 0 16px" }}>
+              아래 비밀번호는 <strong>이 화면에서만</strong> 확인할 수 있습니다. 회원에게 전화/SMS로 전달한 뒤 창을 닫아주세요.
+            </p>
+            <div style={{ marginBottom: 12, fontSize: 13 }}>
+              <span style={{ opacity: 0.6 }}>회원:</span> {tempPwResult.email || tempPwResult.memberId}
+            </div>
+            <div
+              style={{
+                padding: "14px 16px",
+                borderRadius: 8,
+                background: "rgba(0,0,0,0.35)",
+                border: "1px solid rgba(245,158,11,0.4)",
+                fontFamily: "monospace",
+                fontSize: 20,
+                fontWeight: 700,
+                letterSpacing: 2,
+                textAlign: "center",
+                marginBottom: 16,
+                userSelect: "all",
+              }}
+            >
+              {tempPwResult.temporaryPassword}
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button
+                type="button"
+                onClick={copyTempPassword}
+                style={{
+                  flex: 1,
+                  padding: "10px 16px",
+                  borderRadius: 6,
+                  border: "none",
+                  background: "#f59e0b",
+                  color: "#fff",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                📋 복사
+              </button>
+              <button
+                type="button"
+                onClick={() => setTempPwResult(null)}
+                style={{
+                  flex: 1,
+                  padding: "10px 16px",
+                  borderRadius: 6,
+                  border: "1px solid rgba(255,255,255,0.2)",
+                  background: "rgba(255,255,255,0.08)",
+                  color: "#fff",
+                  fontSize: 13,
+                  fontWeight: 600,
+                  cursor: "pointer",
+                }}
+              >
+                확인
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Toast */}
       <Toast open={toast.open} message={toast.message} type={toast.type} onClose={() => setToast({ ...toast, open: false })} />

@@ -7,7 +7,7 @@ import { isRegionRegistered } from "../lib/regionUtils";
 import { getSession, getMemberById } from "../lib/authStore";
 import { canParticipate, getParticipationBlockedReason, checkIsAdmin } from "../lib/viewerRegionStore";
 import * as participationService from "../lib/participationService";
-import { getRegionNotices, formatNotice } from "../lib/noticeUtils"; // ★ PV3 완전 복원
+import { getRegionNotices, formatNotice, resolvePublicAuthorName } from "../lib/noticeUtils"; // ★ PV3 완전 복원
 
 // NaN 방어 헬퍼 — null/undefined/NaN→null(숨김), 0은 "0" 유지 (단위 포함 format string에서 hide가 안전)
 const fmtRegion = {
@@ -545,7 +545,13 @@ export default function Region() {
                 {selectedRegionNotice.title || '공지'}
               </div>
               <div style={{ fontSize: 13, color: '#637074', marginBottom: 12 }}>
-                {selectedRegionNotice.author || '관리자'} · {selectedRegionNotice.formattedDate}
+                {(() => {
+                  const author = resolvePublicAuthorName(selectedRegionNotice.author);
+                  const date = selectedRegionNotice.formattedDate || '';
+                  if (author && date) return `${author} · ${date}`;
+                  if (author) return author;
+                  return date;
+                })()}
               </div>
               <div style={{ whiteSpace: 'pre-wrap', fontSize: 14, lineHeight: 1.6, color: '#2C3E45' }}>
                 {selectedRegionNotice.content || '-'}

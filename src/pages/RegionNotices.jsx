@@ -7,7 +7,7 @@
 import { useState, useEffect } from 'react';
 import { useOutletContext } from 'react-router-dom';
 import { useRegion } from '../context/RegionContext';
-import { getRegionNotices, formatNotice, getNoticeScopeText } from '../lib/noticeUtils.js';
+import { getRegionNotices, formatNotice, getNoticeScopeText, resolvePublicAuthorName } from '../lib/noticeUtils.js';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 
 function resolveNoticeImageUrl(imageUrl) {
@@ -190,8 +190,12 @@ export default function RegionNotices() {
                     display: 'flex',
                     gap: 12,
                   }}>
-                    <span>{notice.author || '관리자'}</span>
-                    <span>·</span>
+                    {resolvePublicAuthorName(notice.author) ? (
+                      <>
+                        <span>{resolvePublicAuthorName(notice.author)}</span>
+                        <span>·</span>
+                      </>
+                    ) : null}
                     <span>{notice.formattedDate}</span>
                   </div>
                 </div>
@@ -285,8 +289,12 @@ export default function RegionNotices() {
                 }}>
                   {getNoticeScopeText(selectedNotice)}
                 </span>
-                <span>{selectedNotice.author || '관리자'}</span>
-                <span>·</span>
+                {resolvePublicAuthorName(selectedNotice.author) ? (
+                  <>
+                    <span>{resolvePublicAuthorName(selectedNotice.author)}</span>
+                    <span>·</span>
+                  </>
+                ) : null}
                 <span>{selectedNotice.formattedDate}</span>
               </div>
 

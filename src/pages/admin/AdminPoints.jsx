@@ -254,7 +254,7 @@ export default function AdminPoints() {
 
   // ★ 유통 지급요청 상태
   const [distPayouts, setDistPayouts] = useState([]);
-  const [distPayoutFilter, setDistPayoutFilter] = useState('PENDING');
+  const [distPayoutFilter, setDistPayoutFilter] = useState('ALL');
 
   const memberNameMap = useMemo(() => {
     const entries = members.map((member) => {
@@ -476,20 +476,15 @@ export default function AdminPoints() {
   // ★ 유통 지급요청 로더
   const loadDistPayouts = async () => {
     try {
-      const token = localStorage.getItem('adminToken') || '';
-      const res = await fetch('/api/admin/dist-payouts', {
-        headers: { 'Content-Type': 'application/json', 'x-admin-token': token }
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      const reqs = data.payouts || [];
-      reqs.sort((a, b) => {
-        if (a.status === b.status) return new Date(b.requested_at) - new Date(a.requested_at);
+      const reqs = await storageAdapter.getAdminDistPayouts();
+      const list = Array.isArray(reqs) ? reqs : [];
+      list.sort((a, b) => {
+        if (a.status === b.status) return new Date(b.requested_at || b.requestedAt) - new Date(a.requested_at || a.requestedAt);
         if (a.status === 'PENDING') return -1;
         if (b.status === 'PENDING') return 1;
         return 0;
       });
-      setDistPayouts(reqs);
+      setDistPayouts(list);
     } catch (e) {
       console.error('[AdminPoints] Failed to load dist payouts:', e);
       setDistPayouts([]);
@@ -510,17 +505,11 @@ export default function AdminPoints() {
     const label = action === 'PAID' ? '지급완료' : action === 'APPROVED' ? '승인' : '거절';
     if (!window.confirm(`정말 ${label} 처리하시겠습니까?`)) return;
     try {
-      const token = localStorage.getItem('adminToken') || '';
-      const res = await fetch(`/api/admin/dist-payouts/${payoutId}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', 'x-admin-token': token },
-        body: JSON.stringify({ status: action })
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
-      if (data.ok) {
+      const data = await storageAdapter.updateAdminDistPayout(payoutId, { status: action });
+      if (data?.ok !== false) {
         showToast(data.message || `${label} 처리 완료`, 'success');
         await loadDistPayouts();
+        window.dispatchEvent(new CustomEvent('su:ssot:changed', { detail: { type: 'dist-payouts', operation: action } }));
       } else {
         throw new Error(data.error || `${label} 처리 실패`);
       }
@@ -529,6 +518,15 @@ export default function AdminPoints() {
       showToast('오류: ' + e.message, 'error');
     }
   };
+
+  const filteredDistPayouts = useMemo(() => {
+    if (!Array.isArray(distPayouts)) return [];
+    if (distPayoutFilter === 'ALL') return distPayouts;
+    if (distPayoutFilter === 'PENDING') {
+      return distPayouts.filter((r) => ['PENDING', 'APPROVED'].includes(String(r.status || '').toUpperCase()));
+    }
+    return distPayouts.filter((r) => String(r.status || '').toUpperCase() === distPayoutFilter);
+  }, [distPayouts, distPayoutFilter]);
 
 
   // 검색 결과: memberQuery로 members 필터링 (이름/이메일/전화번호)
@@ -899,6 +897,8 @@ export default function AdminPoints() {
 
         {(!distPayouts || distPayouts.length === 0) ? (
           <div style={S.emptyBox}>유통 지급요청이 없습니다.</div>
+        ) : filteredDistPayouts.length === 0 ? (
+          <div style={S.emptyBox}>선택한 상태의 유통 지급요청이 없습니다.</div>
         ) : (
           <div style={{ overflowX: 'auto' }}>
             <table style={S.table}>
@@ -913,8 +913,8 @@ export default function AdminPoints() {
                 </tr>
               </thead>
               <tbody>
-                {distPayouts.filter(r => distPayoutFilter === 'ALL' ? true : r.status === distPayoutFilter).map(r => {
-                  const sellerName = memberNameMap.get(String(r.seller_id)) || r.seller_id || '(미상)';
+                {filteredDistPayouts.map(r => {
+                  const sellerName = memberNameMap.get(String(r.seller_id || r.sellerId)) || r.seller_name || r.sellerName || r.seller_id || r.sellerId || '(미상)';
                   const statusLabel = r.status === 'PENDING' ? '대기' : r.status === 'APPROVED' ? '승인' : r.status === 'PAID' ? '지급완료' : r.status === 'REJECTED' ? '거절' : r.status;
                   const statusStyle = r.status === 'PENDING'
                     ? { background: 'rgba(250,204,21,0.12)', color: '#f59e0b' }
@@ -934,8 +934,11 @@ export default function AdminPoints() {
                         <span style={{ ...S.badge, ...statusStyle }}>{statusLabel}</span>
                       </td>
                       <td style={S.td}>
-                        {r.status === 'PENDING' ? (
-                          <div style={{ display: 'flex', gap: 4 }}>
+                        {['PENDING', 'APPROVED'].includes(String(r.status || '').toUpperCase()) ? (
+                          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                            {String(r.status || '').toUpperCase() === 'PENDING' ? (
+                              <button onClick={() => handleDistPayoutAction(r.id, 'APPROVED')} style={{ padding: '6px 10px', borderRadius: 6, background: 'rgba(59,130,246,0.15)', color: '#93c5fd', border: '1px solid rgba(59,130,246,0.3)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>승인</button>
+                            ) : null}
                             <button onClick={() => handleDistPayoutAction(r.id, 'PAID')} style={{ padding: '6px 10px', borderRadius: 6, background: 'linear-gradient(135deg,#10b981,#059669)', color: '#fff', border: 'none', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>지급</button>
                             <button onClick={() => handleDistPayoutAction(r.id, 'REJECTED')} style={{ padding: '6px 10px', borderRadius: 6, background: 'rgba(239,68,68,0.15)', color: '#ef4444', border: '1px solid rgba(239,68,68,0.3)', cursor: 'pointer', fontSize: 13, fontWeight: 600 }}>거절</button>
                           </div>
@@ -1236,7 +1239,7 @@ export default function AdminPoints() {
                 <thead>
                   <tr>
                     <th style={S.th}>회원명</th>
-                    <th style={S.th}>이메일</th>
+                    <th style={S.th}>전화번호</th>
                     <th style={S.th}>보유 포인트</th>
                     <th style={S.th}>작업</th>
                   </tr>
@@ -1248,7 +1251,7 @@ export default function AdminPoints() {
                     const isSelected = selectedUser?.id === memberId;
                     return (
                       <tr 
-                        key={memberId || m.email}
+                        key={memberId || m.phone || m.email}
                         style={{
                           background: isSelected ? "rgba(139,92,246,0.15)" : "transparent",
                           cursor: "pointer",
@@ -1261,7 +1264,7 @@ export default function AdminPoints() {
                         <td style={{ ...S.td, fontWeight: isSelected ? 700 : 400 }}>
                           {isSelected && "✓ "}{memberName}
                         </td>
-                        <td style={S.td}>{m.email || "-"}</td>
+                        <td style={S.td}>{m.phone || "-"}</td>
                         <td style={{ ...S.td, color: "#a855f7", fontWeight: 600 }}>
                           {m.balance.toLocaleString()} P
                         </td>

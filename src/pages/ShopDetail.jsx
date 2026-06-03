@@ -4,12 +4,16 @@ import * as storageAdapter from "../lib/storageAdapter";
 import { register, unregister } from "../lib/ssotRegistry";
 import { getAuthInfo } from "../lib/authStore";
 import { buildAbsoluteUrl, generateQrDataUrl, downloadDataUrl } from "../lib/qrLink";
+import MultiImageUploader, { normalizeImageList } from "../components/MultiImageUploader";
+import SiteConfirmModal from "../components/SiteConfirmModal";
+import SiteAlertModal from "../components/SiteAlertModal";
 
 function normalizeShopAssetUrl(raw) {
   const text = String(raw || '').trim();
   if (!text) return '';
-  if (text.startsWith('/uploads/') && !text.startsWith('/uploads/banners/') && !text.startsWith('/uploads/supplies/') && !text.startsWith('/uploads/videos/')) {
-    const filename = text.replace('/uploads/', '');
+  // 구버전 평면 경로(/uploads/파일명)만 banners 하위로 보정 — content/regions 등은 그대로 유지
+  if (text.startsWith('/uploads/') && !text.slice('/uploads/'.length).includes('/')) {
+    const filename = text.slice('/uploads/'.length);
     return `/uploads/banners/${filename}`;
   }
   return text;
@@ -101,6 +105,20 @@ function getKoreaMapMarkerPosition(location) {
     left: `${(clampedX * 100).toFixed(1)}%`,
     top: `${(clampedY * 100).toFixed(1)}%`,
   };
+}
+
+function normalizeReviewImages(review) {
+  return normalizeImageList(review?.images, 5).map(normalizeShopAssetUrl).filter(Boolean);
+}
+
+function resolveReviewImageSrc(imageUrl) {
+  const normalized = normalizeShopAssetUrl(imageUrl);
+  if (!normalized) return '';
+  if (/^https?:\/\//i.test(normalized) || normalized.startsWith('data:') || normalized.startsWith('blob:')) {
+    return normalized;
+  }
+  const base = import.meta.env.VITE_API_BASE || '';
+  return `${base}${normalized}`;
 }
 
 export default function ShopDetail() {
@@ -289,6 +307,15 @@ export default function ShopDetail() {
   const [reviews, setReviews] = useState([]);
   const [reviewInput, setReviewInput] = useState("");
   const [reviewRating, setReviewRating] = useState(5);
+  const [reviewImages, setReviewImages] = useState([]);
+  const [reviewUploading, setReviewUploading] = useState(false);
+  const [editingReviewId, setEditingReviewId] = useState(null);
+  const [editReviewContent, setEditReviewContent] = useState('');
+  const [editReviewRating, setEditReviewRating] = useState(5);
+  const [editReviewImages, setEditReviewImages] = useState([]);
+  const [reviewActionLoading, setReviewActionLoading] = useState(false);
+  const [reviewConfirmModal, setReviewConfirmModal] = useState({ open: false, title: '', message: '', onConfirm: null });
+  const [reviewAlertModal, setReviewAlertModal] = useState({ open: false, title: '', message: '', tone: 'teal' });
   const [loadingReviews, setLoadingReviews] = useState(false);
   // 탭 + 정렬
   const [shopTab, setShopTab] = useState('info'); // 'info' | 'reviews'
@@ -316,19 +343,36 @@ export default function ShopDetail() {
     return () => unregister(id);
   }, [shop?.id, shop?.shopId]);
 
+  const showReviewAlert = (message, title = '안내', tone = 'teal') => {
+    setReviewAlertModal({ open: true, title, message, tone });
+  };
+
+  const closeReviewAlert = () => {
+    setReviewAlertModal((prev) => ({ ...prev, open: false }));
+  };
+
+  const showReviewConfirm = (message, onConfirm, title = '확인') => {
+    setReviewConfirmModal({ open: true, title, message, onConfirm });
+  };
+
+  const closeReviewConfirm = () => {
+    setReviewConfirmModal({ open: false, title: '', message: '', onConfirm: null });
+  };
+
   const handleReviewSubmit = async () => {
     if (!reviewInput.trim()) {
-      window.alert("후기 내용을 입력해주세요.");
+      showReviewAlert('후기 내용을 입력해주세요.', '입력 안내');
       return;
     }
     
     const auth = getAuthInfo();
     if (!auth || !auth.memberId) {
-      window.alert("로그인이 필요합니다.");
+      showReviewAlert('로그인이 필요합니다.', '로그인 필요');
       return;
     }
     
     try {
+      setReviewUploading(true);
       const shopId = shop.id || shop.shopId;
       const newReview = await storageAdapter.postReview(
         shopId,
@@ -336,6 +380,7 @@ export default function ShopDetail() {
           content: reviewInput.trim(),
           rating: reviewRating,
           authorName: auth.name || '익명',
+          images: reviewImages,
         },
         auth.memberId
       );
@@ -344,10 +389,91 @@ export default function ShopDetail() {
       setReviews((prev) => [newReview, ...prev]);
       setReviewInput("");
       setReviewRating(5);
-      window.alert("후기가 등록되었습니다!");
+      setReviewImages([]);
+      showReviewAlert('후기가 등록되었습니다!', '등록 완료', 'emerald');
     } catch (error) {
       console.error('[ShopDetail] Failed to post review:', error);
-      window.alert("후기 등록 실패: " + error.message);
+      showReviewAlert(`후기 등록 실패: ${error.message}`, '등록 실패', 'rose');
+    } finally {
+      setReviewUploading(false);
+    }
+  };
+
+  const cancelEditReview = () => {
+    setEditingReviewId(null);
+    setEditReviewContent('');
+    setEditReviewRating(5);
+    setEditReviewImages([]);
+  };
+
+  const startEditReview = (review) => {
+    const reviewId = review.reviewId || review.id;
+    setEditingReviewId(reviewId);
+    setEditReviewContent(review.content || '');
+    setEditReviewRating(review.rating || 5);
+    setEditReviewImages(normalizeReviewImages(review));
+  };
+
+  const handleReviewDelete = (review) => {
+    const authInfo = getAuthInfo();
+    if (!authInfo?.memberId) {
+      showReviewAlert('로그인이 필요합니다.', '로그인 필요');
+      return;
+    }
+
+    const reviewId = review.reviewId || review.id;
+    const shopId = shop.id || shop.shopId;
+    const isAuthor = String(review.memberId) === String(authInfo.memberId);
+    const confirmMsg = isAuthor ? '내 후기를 삭제하시겠습니까?' : '이 후기를 삭제하시겠습니까?';
+
+    showReviewConfirm(confirmMsg, async () => {
+      closeReviewConfirm();
+      try {
+        setReviewActionLoading(true);
+        await storageAdapter.deleteReview(shopId, reviewId);
+        setReviews((prev) => prev.filter((item) => (item.reviewId || item.id) !== reviewId));
+        if (editingReviewId === reviewId) cancelEditReview();
+        showReviewAlert('후기가 삭제되었습니다.', '삭제 완료', 'emerald');
+      } catch (error) {
+        console.error('[ShopDetail] Failed to delete review:', error);
+        showReviewAlert(error.message || '알 수 없는 오류', '삭제 실패', 'rose');
+      } finally {
+        setReviewActionLoading(false);
+      }
+    }, '후기 삭제');
+  };
+
+  const handleReviewUpdate = async () => {
+    if (!editReviewContent.trim()) {
+      showReviewAlert('후기 내용을 입력해주세요.', '입력 안내');
+      return;
+    }
+
+    const authInfo = getAuthInfo();
+    if (!authInfo?.memberId) {
+      showReviewAlert('로그인이 필요합니다.', '로그인 필요');
+      return;
+    }
+
+    const shopId = shop.id || shop.shopId;
+    try {
+      setReviewActionLoading(true);
+      const updated = await storageAdapter.updateReview(shopId, editingReviewId, {
+        content: editReviewContent.trim(),
+        rating: editReviewRating,
+        images: editReviewImages,
+      });
+      setReviews((prev) => prev.map((item) => {
+        const itemId = item.reviewId || item.id;
+        return itemId === editingReviewId ? updated : item;
+      }));
+      cancelEditReview();
+      showReviewAlert('후기가 수정되었습니다.', '수정 완료', 'emerald');
+    } catch (error) {
+      console.error('[ShopDetail] Failed to update review:', error);
+      showReviewAlert(error.message || '알 수 없는 오류', '수정 실패', 'rose');
+    } finally {
+      setReviewActionLoading(false);
     }
   };
 
@@ -419,7 +545,12 @@ export default function ShopDetail() {
   };
 
   const auth = getAuthInfo();
-  const isShopOwner = !!auth?.memberId && !!shop?.ownerId && String(auth.memberId) === String(shop.ownerId);
+  const shopOwnerId = shop?.ownerId || shop?.owner_id || '';
+  const shopCreatedBy = shop?.createdBy || shop?.created_by || '';
+  const isShopOwner = !!auth?.memberId && (
+    String(auth.memberId) === String(shopOwnerId) ||
+    (!!shopCreatedBy && String(auth.memberId) === String(shopCreatedBy))
+  );
   const primaryImage = getPrimaryShopImage(shop);
   const galleryImages = normalizeInteriorShopImages(shop, primaryImage);
   const existingShopImageCount = galleryImages.length;
@@ -517,6 +648,25 @@ export default function ShopDetail() {
     borderRadius: 16,
     border: "1px solid var(--c-border)",
     background: "var(--c-surface)",
+  };
+
+  const shopActionBtnBase = {
+    flex: 1,
+    minWidth: 0,
+    height: 52,
+    margin: 0,
+    padding: "0 10px",
+    borderRadius: 14,
+    fontWeight: 800,
+    fontSize: 14,
+    lineHeight: 1.2,
+    cursor: "pointer",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    boxSizing: "border-box",
+    whiteSpace: "nowrap",
   };
 
   // 섹션 사이 thick divider (배민 스타일)
@@ -1133,6 +1283,11 @@ export default function ShopDetail() {
                     const reviewId = review.reviewId || review.id;
                     const authorName = review.authorName || review.author || '익명';
                     const displayDate = review.createdAt || review.date ? new Date(review.createdAt || review.date).toLocaleDateString('ko-KR') : '';
+                    const reviewImageList = normalizeReviewImages(review);
+                    const isReviewAuthor = !!auth?.memberId && String(review.memberId) === String(auth.memberId);
+                    const canEditReview = isReviewAuthor;
+                    const canDeleteReview = isReviewAuthor || isShopOwner;
+                    const isEditing = editingReviewId === reviewId;
                     return (
                       <div key={reviewId} style={{ ...cardStyle, padding: '12px 14px' }}>
                         <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, marginBottom: 8 }}>
@@ -1146,16 +1301,113 @@ export default function ShopDetail() {
                             {(authorName[0] || '?').toUpperCase()}
                           </div>
                           <div style={{ flex: 1, minWidth: 0 }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                               <div style={{ fontWeight: 700, fontSize: 14 }}>{authorName}</div>
-                              <span style={{ fontSize: 11, opacity: 0.5 }}>{displayDate}</span>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexShrink: 0 }}>
+                                <span style={{ fontSize: 11, opacity: 0.5 }}>{displayDate}</span>
+                                {(canEditReview || canDeleteReview) && !isEditing && (
+                                  <div style={{ display: 'flex', gap: 4 }}>
+                                    {canEditReview && (
+                                      <button
+                                        type="button"
+                                        onClick={() => startEditReview(review)}
+                                        disabled={reviewActionLoading}
+                                        style={{ border: 'none', background: 'transparent', color: 'var(--c-primary, #0C5460)', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: '2px 4px' }}
+                                      >
+                                        수정
+                                      </button>
+                                    )}
+                                    {canDeleteReview && (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleReviewDelete(review)}
+                                        disabled={reviewActionLoading}
+                                        style={{ border: 'none', background: 'transparent', color: '#dc2626', fontSize: 11, fontWeight: 700, cursor: 'pointer', padding: '2px 4px' }}
+                                      >
+                                        삭제
+                                      </button>
+                                    )}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                             <div style={{ color: '#ffd700', fontSize: 12, marginTop: 2 }}>
                               {'★'.repeat(review.rating || 0)}{'☆'.repeat(5 - (review.rating || 0))}
                             </div>
                           </div>
                         </div>
-                        <div style={{ fontSize: 14, opacity: 0.9, lineHeight: 1.6, paddingLeft: 42 }}>{review.content}</div>
+                        {isEditing ? (
+                          <div style={{ paddingLeft: 42 }}>
+                            <div style={{ display: 'flex', gap: 4, marginBottom: 10 }}>
+                              {[1, 2, 3, 4, 5].map((star) => (
+                                <button
+                                  key={star}
+                                  type="button"
+                                  onClick={() => setEditReviewRating(star)}
+                                  style={{ background: 'none', border: 'none', fontSize: 22, cursor: 'pointer', color: star <= editReviewRating ? '#f59e0b' : 'var(--c-border)', padding: 0 }}
+                                >
+                                  ★
+                                </button>
+                              ))}
+                            </div>
+                            <textarea
+                              value={editReviewContent}
+                              onChange={(e) => setEditReviewContent(e.target.value)}
+                              className="su-input"
+                              style={{ width: '100%', minHeight: 80, fontSize: 14, resize: 'vertical', boxSizing: 'border-box' }}
+                            />
+                            <div style={{ marginTop: 10 }}>
+                              <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, opacity: 0.75 }}>사진 (최대 5장)</div>
+                              <MultiImageUploader
+                                value={editReviewImages}
+                                maxImages={5}
+                                onChange={setEditReviewImages}
+                                uploadImage={async (file) => {
+                                  const result = await storageAdapter.uploadContentImage(file, { context: 'shop-review' });
+                                  return result.imageUrl || result.url || '';
+                                }}
+                                onError={(message) => showReviewAlert(message || '이미지 업로드에 실패했습니다.', '업로드 실패', 'rose')}
+                              />
+                            </div>
+                            <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                              <button
+                                type="button"
+                                onClick={handleReviewUpdate}
+                                disabled={reviewActionLoading}
+                                className="su-primaryBtn"
+                                style={{ flex: 1, padding: '10px 12px', borderRadius: 10, fontWeight: 800, fontSize: 13 }}
+                              >
+                                {reviewActionLoading ? '저장 중...' : '저장'}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={cancelEditReview}
+                                disabled={reviewActionLoading}
+                                className="su-chip"
+                                style={{ padding: '10px 12px', borderRadius: 10, fontWeight: 700, fontSize: 13 }}
+                              >
+                                취소
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <>
+                            <div style={{ fontSize: 14, opacity: 0.9, lineHeight: 1.6, paddingLeft: 42 }}>{review.content}</div>
+                            {reviewImageList.length > 0 && (
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 8, marginTop: 10, paddingLeft: 42 }}>
+                                {reviewImageList.map((imageUrl, index) => (
+                                  <img
+                                    key={`${reviewId}-img-${index}`}
+                                    src={resolveReviewImageSrc(imageUrl)}
+                                    alt={`${authorName} 후기 이미지 ${index + 1}`}
+                                    loading="lazy"
+                                    style={{ width: '100%', height: 88, objectFit: 'cover', borderRadius: 10, border: '1px solid rgba(0,0,0,0.08)' }}
+                                  />
+                                ))}
+                              </div>
+                            )}
+                          </>
+                        )}
                       </div>
                     );
                   })}
@@ -1180,10 +1432,25 @@ export default function ShopDetail() {
                   className="su-input"
                   style={{ width: '100%', minHeight: 80, fontSize: 14, resize: 'vertical', boxSizing: 'border-box' }}
                 />
+                <div style={{ marginTop: 10 }}>
+                  <div style={{ fontSize: 12, fontWeight: 700, marginBottom: 6, opacity: 0.75 }}>사진 첨부 (선택, 최대 5장)</div>
+                  <MultiImageUploader
+                    value={reviewImages}
+                    maxImages={5}
+                    onChange={setReviewImages}
+                    uploadImage={async (file) => {
+                      const result = await storageAdapter.uploadContentImage(file, { context: 'shop-review' });
+                      return result.imageUrl || result.url || '';
+                    }}
+                    onError={(message) => showReviewAlert(message || '이미지 업로드에 실패했습니다.', '업로드 실패', 'rose')}
+                    helperText="매장 사진, 메뉴 사진 등을 첨부할 수 있습니다."
+                  />
+                </div>
                 <button type="button" onClick={handleReviewSubmit}
+                  disabled={reviewUploading}
                   className="su-primaryBtn"
-                  style={{ marginTop: 10, width: '100%', padding: 12, borderRadius: 12, fontWeight: 800, fontSize: 14, cursor: 'pointer' }}>
-                  후기 등록
+                  style={{ marginTop: 10, width: '100%', padding: 12, borderRadius: 12, fontWeight: 800, fontSize: 14, cursor: reviewUploading ? 'wait' : 'pointer', opacity: reviewUploading ? 0.7 : 1 }}>
+                  {reviewUploading ? '등록 중...' : '후기 등록'}
                 </button>
               </div>
             </>
@@ -1203,6 +1470,7 @@ export default function ShopDetail() {
           paddingRight: 16,
           background: "linear-gradient(to top, var(--c-bg) 0%, var(--c-bg) 70%, transparent 100%)",
           display: "flex",
+          alignItems: "stretch",
           gap: 10,
           zIndex: 100,
         }}
@@ -1210,18 +1478,11 @@ export default function ShopDetail() {
         <button
           type="button"
           onClick={handleCall}
-          className="su-btnGhost"
           style={{
-            flex: 1,
-            padding: "14px",
-            borderRadius: 14,
-            fontWeight: 800,
-            fontSize: 15,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 8,
+            ...shopActionBtnBase,
+            border: "1.5px solid var(--c-border)",
+            background: "var(--c-surface, #fff)",
+            color: "var(--c-tx-s, #475569)",
           }}
         >
           📞 전화
@@ -1230,19 +1491,11 @@ export default function ShopDetail() {
           type="button"
           onClick={() => setReservationOpen(true)}
           style={{
-            flex: 1,
-            padding: "14px",
-            borderRadius: 14,
-            fontWeight: 800,
-            fontSize: 15,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 8,
+            ...shopActionBtnBase,
+            border: "none",
             background: "linear-gradient(135deg, #f59e0b, #d97706)",
             color: "#fff",
-            border: "none",
+            boxShadow: "0 4px 14px rgba(245, 158, 11, 0.28)",
           }}
         >
           📅 예약
@@ -1250,18 +1503,12 @@ export default function ShopDetail() {
         <button
           type="button"
           onClick={handleNavigation}
-          className="su-primaryBtn"
           style={{
-            flex: 1,
-            padding: "14px",
-            borderRadius: 14,
-            fontWeight: 800,
-            fontSize: 15,
-            cursor: "pointer",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            gap: 8,
+            ...shopActionBtnBase,
+            border: "none",
+            background: "linear-gradient(135deg, #0E7490, #0B5F73)",
+            color: "#fff",
+            boxShadow: "0 4px 14px rgba(14, 116, 144, 0.28)",
           }}
         >
           🧭 길찾기
@@ -1320,6 +1567,23 @@ export default function ShopDetail() {
           </div>
         </div>
       )}
+      <SiteConfirmModal
+        open={reviewConfirmModal.open}
+        title={reviewConfirmModal.title}
+        message={reviewConfirmModal.message}
+        confirmText="삭제"
+        cancelText="취소"
+        tone="teal"
+        onCancel={closeReviewConfirm}
+        onConfirm={() => reviewConfirmModal.onConfirm?.()}
+      />
+      <SiteAlertModal
+        open={reviewAlertModal.open}
+        title={reviewAlertModal.title}
+        message={reviewAlertModal.message}
+        tone={reviewAlertModal.tone}
+        onClose={closeReviewAlert}
+      />
       </>
       )}
     </div>

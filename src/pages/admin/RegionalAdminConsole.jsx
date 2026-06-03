@@ -27,6 +27,7 @@ const SECTION_META = [
   { key: "broadcasts", title: "방송", accent: "#db2777" },
   { key: "auditions", title: "오디션", accent: "#9333ea" },
   { key: "news", title: "뉴스", accent: "#0891b2" },
+  { key: "banners", title: "배너광고", accent: "#d97706" },
   { key: "apartments", title: "아파트", accent: "#ea580c" },
   { key: "apartment-notices", title: "아파트 공지", accent: "#ea580c" },
   { key: "shops", title: "상점", accent: "#0284c7" },
@@ -152,70 +153,14 @@ function normalizeId(item) {
     item?.apartment_id ??
     item?.flyerId ??
     item?.flyer_id ??
+    item?.bannerId ??
+    item?.banner_id ??
     null
   );
 }
 
 function resolveRegionName(region) {
   return region?.name || [region?.province, region?.district].filter(Boolean).join(" ") || region?.id || "지역";
-
-                        <div style={{ marginTop: 8, borderTop: '1px solid rgba(148,163,184,0.16)', paddingTop: 8 }}>
-                          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-                            <span style={{ fontSize: 11, color: '#64748b', fontWeight: 700 }}>이미지 {(Array.isArray(sec.images) ? sec.images.length : 0)}/10</span>
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const picker = document.createElement('input');
-                                picker.type = 'file';
-                                picker.accept = 'image/jpeg,image/png,image/gif,image/webp';
-                                picker.multiple = true;
-                                picker.onchange = async () => {
-                                  const files = picker.files;
-                                  if (!files || !files.length) return;
-                                  const current = Array.isArray(sec.images) ? sec.images : [];
-                                  const remaining = 10 - current.length;
-                                  if (remaining <= 0) return;
-                                  const added = [];
-                                  for (const [offset, file] of Array.from(files).slice(0, remaining).entries()) {
-                                    try {
-                                      const result = await storageAdapter.uploadContentImage(file, { context: 'regional-intro' });
-                                      const url = result.imageUrl || result.url || '';
-                                      if (url) added.push({ url, createdAt: Date.now() + offset });
-                                    } catch (err) {
-                                      setToast({ open: true, message: err.message || '업로드 실패', type: 'error' });
-                                    }
-                                  }
-                                  if (!added.length) return;
-                                  const next = sections.map((s, idx) => idx === i ? { ...s, images: [...current, ...added] } : s);
-                                  onChange(next);
-                                };
-                                picker.click();
-                              }}
-                              style={{ ...buttonBaseStyle, minHeight: 28, padding: '0 8px', fontSize: 11 }}
-                            >이미지 추가</button>
-                          </div>
-                          <div style={{ display: 'grid', gap: 6 }}>
-                            {(Array.isArray(sec.images) ? sec.images : []).map((img, idx) => {
-                              const src = typeof img === 'string' ? img : (img?.url || img?.imageUrl || '');
-                              if (!src) return null;
-                              return (
-                                <div key={`intro-sec-${i}-img-${idx}`} style={{ display: 'flex', alignItems: 'center', gap: 8, border: '1px solid rgba(148,163,184,0.2)', borderRadius: 8, padding: 6 }}>
-                                  <img src={src} alt="" style={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 8 }} />
-                                  <div style={{ flex: 1, fontSize: 12, color: '#64748b' }}>이미지 {idx + 1}</div>
-                                  <button
-                                    type="button"
-                                    onClick={() => {
-                                      const current = Array.isArray(sec.images) ? sec.images : [];
-                                      const next = sections.map((s, sIdx) => sIdx === i ? { ...s, images: current.filter((_, k) => k !== idx) } : s);
-                                      onChange(next);
-                                    }}
-                                    style={{ ...buttonBaseStyle, color: '#dc2626', minHeight: 28, padding: '0 8px', fontSize: 11 }}
-                                  >삭제</button>
-                                </div>
-                              );
-                            })}
-                          </div>
-                        </div>
 }
 
 function getItemRegionId(item) {
@@ -447,6 +392,7 @@ export default function RegionalAdminConsole() {
     "apartment-notices": [],
     shops: [],
     flyers: [],
+    banners: [],
     intro: null,
     stats: null,
   });
@@ -545,7 +491,7 @@ export default function RegionalAdminConsole() {
     const handleSsotChanged = (event) => {
       const changedType = String(event?.detail?.type || '').toLowerCase();
       // 타입 단수/복수 모두 허용
-      if (["missions", "mission", "events", "event", "notices", "notice"].includes(changedType)) {
+      if (["missions", "mission", "events", "event", "notices", "notice", "banners", "banner"].includes(changedType)) {
         refreshData();
       }
     };
@@ -642,6 +588,7 @@ export default function RegionalAdminConsole() {
           "apartment-notices": nextApartmentNotices,
           shops: [],
           flyers: [],
+          banners: [],
           intro: null,
           stats: statsResult,
         });
@@ -655,13 +602,15 @@ export default function RegionalAdminConsole() {
           storageAdapter.getShops({ regionId: selectedRegionId }).catch(() => []),
           storageAdapter.getRegionFlyers(selectedRegionId).catch(() => []),
           storageAdapter.getRegionIntro(selectedRegionId).catch(() => null),
-        ]).then(([auditionsResult, newsResult, shopsResult, flyersResult, introResult]) => {
+          storageAdapter.getRegionPortalBanners(selectedRegionId).catch(() => []),
+        ]).then(([auditionsResult, newsResult, shopsResult, flyersResult, introResult, bannersResult]) => {
           if (cancelled) return;
           const nextAuditions = normalizeList(auditionsResult, ["auditions"]).filter((item) => getItemRegionId(item) === selectedRegionId);
           const nextNews = Array.isArray(newsResult) ? newsResult : [];
           const nextShops = normalizeList(shopsResult, ["shops"]).filter((item) => getItemRegionId(item) === selectedRegionId || String(item?.region || "").trim() === selectedRegionName);
           const nextFlyers = normalizeList(flyersResult, ["flyers"]).filter((item) => getItemRegionId(item) === selectedRegionId || !getItemRegionId(item));
           const nextIntro = normalizeIntroResult(introResult);
+          const nextBanners = normalizeList(bannersResult, ["banners"]);
 
           setContent((prev) => ({
             ...prev,
@@ -670,6 +619,7 @@ export default function RegionalAdminConsole() {
             shops: nextShops,
             flyers: nextFlyers,
             intro: nextIntro,
+            banners: nextBanners,
           }));
         });
       } catch (error) {
@@ -699,7 +649,8 @@ export default function RegionalAdminConsole() {
     "apartment-notices": content["apartment-notices"]?.length || 0,
     shops: content.shops.length,
     flyers: content.flyers.length,
-    intro: content.intro?.content || (Array.isArray(content.intro?.sections) && content.intro.sections.length > 0) ? 1 : 0,
+    banners: content.banners.length,
+    intro: (content.intro?.content || (Array.isArray(content.intro?.images) && content.intro.images.length > 0) || (Array.isArray(content.intro?.sections) && content.intro.sections.length > 0)) ? 1 : 0,
   }), [content]);
 
   const summaryCards = useMemo(() => {
@@ -994,9 +945,55 @@ export default function RegionalAdminConsole() {
           { key: "endAt", label: "종료일", type: "date" },
           { key: "isActive", label: "활성", type: "checkbox" },
         ];
+      case "banners":
+        return [
+          { key: "title", label: "배너 제목", type: "text", placeholder: "광고 제목" },
+          {
+            key: "imageUrl",
+            label: "배너 이미지",
+            type: "custom",
+            customRender: (value, onChange) => (
+              <MultiImageUploader
+                value={value ? [value] : []}
+                maxImages={1}
+                onChange={(nextImages) => onChange(Array.isArray(nextImages) && nextImages[0] ? nextImages[0] : "")}
+                uploadImage={async (file) => {
+                  const result = await storageAdapter.uploadBannerImage(file);
+                  return result.imageUrl || result.url || "";
+                }}
+                onError={(message) => setToast({ open: true, message, type: "error" })}
+                helperText="지역포털 하단에 노출됩니다. 3:1 비율 권장 (1200x400 이상)."
+              />
+            ),
+          },
+          { key: "linkUrl", label: "연결 링크", type: "text", placeholder: "https://example.com (선택)" },
+          { key: "startDate", label: "노출 시작일", type: "date" },
+          { key: "endDate", label: "노출 종료일", type: "date" },
+          { key: "priority", label: "우선순위", type: "number", placeholder: "0" },
+          { key: "isActive", label: "활성", type: "checkbox" },
+        ];
       case "intro":
         return [
           { key: "content", label: "소개 문구", type: "textarea", rows: 6, placeholder: "지역 소개 내용을 입력하세요" },
+          {
+            key: "images",
+            label: "소개 이미지",
+            type: "custom",
+            customRender: (value, onChange) => (
+              <MultiImageUploader
+                value={value}
+                maxImages={10}
+                countText="이미지 등록"
+                onChange={onChange}
+                uploadImage={async (file) => {
+                  const result = await storageAdapter.uploadContentImage(file, { context: "regional-intro" });
+                  return result.imageUrl || result.url || "";
+                }}
+                onError={(message) => setToast({ open: true, message, type: "error" })}
+                helperText="지역 소개 대표 이미지를 최대 10장까지 등록할 수 있습니다."
+              />
+            ),
+          },
           {
             key: "introSections",
             label: "섹션 (제목 + 내용 + 이미지 최대 10장)",
@@ -1235,6 +1232,16 @@ export default function RegionalAdminConsole() {
           endAt: formatDateInput(item?.endAt || item?.end_at),
           isActive: item?.isActive !== false,
         };
+      case "banners":
+        return {
+          title: item?.title || "",
+          imageUrl: item?.imageUrl || item?.image_url || "",
+          linkUrl: item?.linkUrl || item?.link_url || "",
+          startDate: formatDateInput(item?.startDate || item?.start_date),
+          endDate: formatDateInput(item?.endDate || item?.end_date),
+          priority: item?.priority ?? 0,
+          isActive: item?.isActive !== false,
+        };
       case "intro": {
         const introItem = item || content.intro || {};
         const rawImages = Array.isArray(introItem?.images) ? introItem.images : [];
@@ -1260,19 +1267,9 @@ export default function RegionalAdminConsole() {
           createdAt: s?.createdAt || s?.created_at || '',
         }));
 
-        // 과거 전역 이미지 모델 호환: 섹션이 없거나 섹션 이미지가 모두 비어 있으면 첫 섹션으로 이관
-        const hasSectionImages = normalizedSections.some((sec) => Array.isArray(sec.images) && sec.images.length > 0);
-        if (!hasSectionImages && rawImages.length > 0) {
-          normalizedSections.push({
-            title: '',
-            content: '',
-            images: normalizeImages(rawImages),
-            createdAt: Date.now(),
-          });
-        }
-
         return {
           content: introItem?.content || "",
+          images: normalizeImageList(rawImages, 10),
           introSections: normalizedSections,
         };
       }
@@ -1562,6 +1559,14 @@ export default function RegionalAdminConsole() {
           break;
         }
         case "intro": {
+          const normalizedImages = (Array.isArray(form.images) ? form.images : [])
+            .map((img, imgIdx) => ({
+              url: typeof img === "string" ? img : (img?.url || img?.imageUrl || ""),
+              createdAt: (typeof img === "object" && img) ? (img.createdAt || img.created_at || Date.now() + imgIdx) : Date.now() + imgIdx,
+            }))
+            .filter((img) => img.url)
+            .slice(0, 10);
+
           const normalizedSections = (Array.isArray(form.introSections) ? form.introSections : [])
             .filter((s) => s?.title?.trim() || s?.content?.trim() || (Array.isArray(s?.images) && s.images.length > 0))
             .map((s, index) => ({
@@ -1579,11 +1584,35 @@ export default function RegionalAdminConsole() {
 
           const payload = {
             content: String(form.content || "").trim(),
-            images: [],
+            images: normalizedImages,
             sections: normalizedSections,
             introSections: normalizedSections,
           };
           await storageAdapter.updateRegionIntro(selectedRegionId, payload);
+          break;
+        }
+        case "banners": {
+          if (!withGuard(form.title?.trim(), "배너 제목을 입력해주세요.")) return;
+          const imageUrl = String(form.imageUrl || "").trim();
+          if (!withGuard(imageUrl || editor.mode === "edit", "배너 이미지를 등록해주세요.")) return;
+          const payload = {
+            title: form.title.trim(),
+            imageUrl,
+            linkUrl: String(form.linkUrl || "").trim(),
+            alt: form.title.trim(),
+            type: "region_portal",
+            regionId: selectedRegionId,
+            regions: [selectedRegionId],
+            startDate: form.startDate || null,
+            endDate: form.endDate || null,
+            priority: parseInt(form.priority, 10) || 0,
+            isActive: form.isActive !== false,
+          };
+          if (editor.mode === "edit") {
+            await storageAdapter.upsertBanner({ ...payload, id: editor.itemId });
+          } else {
+            await storageAdapter.createBanner(payload);
+          }
           break;
         }
         default:
@@ -1644,6 +1673,9 @@ export default function RegionalAdminConsole() {
         case "flyers":
           if (!withGuard(isAdminLevel, "현재 전단 삭제 API는 관리자 권한에서만 사용할 수 있습니다.")) return;
           await storageAdapter.deleteRegionFlyer(selectedRegionId, itemId);
+          break;
+        case "banners":
+          await storageAdapter.deleteBanner(itemId);
           break;
         default:
           return;
@@ -1854,6 +1886,7 @@ export default function RegionalAdminConsole() {
       case "broadcasts": return "방송 생성과 라이브 상태 전환을 함께 지원합니다.";
       case "auditions": return "지역 오디션 공고를 동일한 데이터로 운영합니다.";
       case "news": return "메인관리자와 완전히 동일한 뉴스 데이터를 사용합니다.";
+      case "banners": return "지역포털 홈 하단에 노출되는 광고 배너입니다.";
       case "apartments": return "단지 등록과 수정, 삭제를 바로 처리합니다.";
       case "apartment-notices": return "아파트 공지 등록/수정은 선택한 단지 기준으로 처리됩니다.";
       case "shops": return "상점과 상권 데이터를 같은 시스템에 바로 반영합니다.";
@@ -1868,6 +1901,8 @@ export default function RegionalAdminConsole() {
       case "notices":
       case "news":
         return summarizeText(item?.content);
+      case "banners":
+        return summarizeText(item?.linkUrl || item?.link_url || "링크 없음");
       case "events":
         return summarizeText(item?.description || item?.content);
       case "festivals":
@@ -1907,6 +1942,12 @@ export default function RegionalAdminConsole() {
         return [item?.type || "FREE", item?.status || "OPEN", item?.published === false ? "비공개" : "게시"];
       case "news":
         return [item?.isPinned ? "고정" : "일반", item?.isPublic === false ? "비공개" : "공개", `등록 ${formatDate(item?.createdAt)}`];
+      case "banners":
+        return [
+          item?.isActive === false ? "비활성" : "활성",
+          `우선순위 ${item?.priority ?? 0}`,
+          `${formatDate(item?.startDate)} ~ ${formatDate(item?.endDate)}`,
+        ];
       case "apartments":
         return [item?.districtName || item?.district || "구/군 전체", item?.isActive === false ? "비활성" : "활성"];
       case "apartment-notices":
@@ -1918,7 +1959,13 @@ export default function RegionalAdminConsole() {
       case "intro":
         return [
           Array.isArray(item?.sections) ? `섹션 ${item.sections.length}` : "섹션 0",
-          `이미지 ${Array.isArray(item?.sections) ? item.sections.reduce((acc, sec) => acc + (Array.isArray(sec?.images) ? sec.images.length : 0), 0) : 0}`,
+          `이미지 ${(() => {
+            const top = Array.isArray(item?.images) ? item.images.length : 0;
+            const section = Array.isArray(item?.sections)
+              ? item.sections.reduce((acc, sec) => acc + (Array.isArray(sec?.images) ? sec.images.length : 0), 0)
+              : 0;
+            return top + section;
+          })()}`,
           "지역 소개",
         ];
       default:

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { io } from 'socket.io-client';
 
 /**
@@ -8,73 +8,107 @@ import { io } from 'socket.io-client';
 
 const ICE_SERVERS = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
 
+function getSocketUrl() {
+  return window.location.origin;
+}
+
 export default function LiveBroadcastPlayer() {
   const [isLive, setIsLive] = useState(false);
   const [connected, setConnected] = useState(false);
   const videoRef = useRef(null);
   const socketRef = useRef(null);
   const pcRef = useRef(null);
+  const remoteStreamRef = useRef(null);
 
-  const socketUrl = import.meta.env.DEV ? 'http://localhost:8787' : window.location.origin;
+  const attachRemoteStream = useCallback(() => {
+    const video = videoRef.current;
+    const stream = remoteStreamRef.current;
+    if (!video || !stream) return;
+    if (video.srcObject !== stream) {
+      video.srcObject = stream;
+    }
+    video.play().then(() => {
+      setConnected(true);
+    }).catch(() => {});
+  }, []);
 
   useEffect(() => {
-    const socket = io(socketUrl, { transports: ['websocket', 'polling'] });
+    if (isLive) {
+      attachRemoteStream();
+    }
+  }, [isLive, attachRemoteStream]);
+
+  useEffect(() => {
+    const socket = io(getSocketUrl(), { transports: ['websocket', 'polling'] });
     socketRef.current = socket;
 
-    // 방송자가 준비됐을 때 → watcher 등록
+    const resetPlayback = () => {
+      pcRef.current?.close();
+      pcRef.current = null;
+      remoteStreamRef.current = null;
+      if (videoRef.current) videoRef.current.srcObject = null;
+      setIsLive(false);
+      setConnected(false);
+    };
+
     socket.on('broadcaster-ready', () => {
       setIsLive(true);
       socket.emit('watcher');
     });
 
-    // broadcaster가 offer 보내옴
     socket.on('offer', async (broadcasterId, description) => {
       setIsLive(true);
+
+      pcRef.current?.close();
       const pc = new RTCPeerConnection(ICE_SERVERS);
       pcRef.current = pc;
 
-      pc.ontrack = ({ streams }) => {
-        if (videoRef.current && streams[0]) {
-          videoRef.current.srcObject = streams[0];
-          videoRef.current.play().catch(() => {});
-          setConnected(true);
-        }
+      pc.ontrack = (event) => {
+        const stream = event.streams?.[0] || (event.track ? new MediaStream([event.track]) : null);
+        if (!stream) return;
+        remoteStreamRef.current = stream;
+        attachRemoteStream();
       };
 
       pc.onicecandidate = ({ candidate }) => {
         if (candidate) socket.emit('candidate', broadcasterId, candidate);
       };
 
-      await pc.setRemoteDescription(description);
-      const answer = await pc.createAnswer();
-      await pc.setLocalDescription(answer);
-      socket.emit('answer', broadcasterId, pc.localDescription);
+      pc.onconnectionstatechange = () => {
+        if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
+          setConnected(false);
+        }
+        if (pc.connectionState === 'connected') {
+          attachRemoteStream();
+        }
+      };
+
+      try {
+        await pc.setRemoteDescription(description);
+        const answer = await pc.createAnswer();
+        await pc.setLocalDescription(answer);
+        socket.emit('answer', broadcasterId, pc.localDescription);
+      } catch (err) {
+        console.error('[LiveBroadcastPlayer] WebRTC answer failed:', err);
+        resetPlayback();
+      }
     });
 
-    // ICE candidate 수신
     socket.on('candidate', (_senderId, candidate) => {
       pcRef.current?.addIceCandidate(new RTCIceCandidate(candidate)).catch(() => {});
     });
 
-    // 방송 종료
-    socket.on('broadcast-ended', () => {
-      pcRef.current?.close();
-      pcRef.current = null;
-      if (videoRef.current) videoRef.current.srcObject = null;
-      setIsLive(false);
-      setConnected(false);
-    });
+    socket.on('broadcast-ended', resetPlayback);
 
-    // 연결 후 이미 방송 중인지 확인을 위해 watcher 등록 시도
     socket.on('connect', () => {
       socket.emit('watcher');
     });
 
     return () => {
-      pcRef.current?.close();
+      resetPlayback();
       socket.disconnect();
     };
-  }, []); // eslint-disable-line
+  }, [attachRemoteStream]);
 
   if (!isLive) {
     return (
@@ -91,6 +125,7 @@ export default function LiveBroadcastPlayer() {
       }}>
         <span style={{ fontSize: 8 }}>⚫</span>
         방송 없음
+        {/* video 엘리먼트를 조기 마운트하지 않음 — isLive 전환 후 useEffect에서 스트림 연결 */}
       </div>
     );
   }
@@ -100,7 +135,7 @@ export default function LiveBroadcastPlayer() {
       borderRadius: 12,
       overflow: 'hidden',
       background: '#000',
-      border: '1px solid rgba(255,59,48,0.4)'
+      border: '1px solid rgba(255,59,48,0.4)',
     }}>
       <div style={{
         padding: 8,
@@ -109,15 +144,15 @@ export default function LiveBroadcastPlayer() {
         alignItems: 'center',
         gap: 8,
         fontWeight: 700,
-        fontSize: 14
+        fontSize: 14,
       }}>
         <span style={{ color: '#ff3b30' }}>🔴</span>
         실시간 라이브 방송 중
-        {!connected && <span style={{ fontSize: 11, color: '#fbbf24', marginLeft: 4 }}>연결 중...</span>}
+        {!connected ? <span style={{ fontSize: 11, color: '#fbbf24', marginLeft: 4 }}>연결 중...</span> : null}
       </div>
       <video
         ref={videoRef}
-        style={{ width: '100%', height: 'auto', display: 'block' }}
+        style={{ width: '100%', height: 'auto', display: 'block', background: '#000' }}
         autoPlay
         playsInline
         controls

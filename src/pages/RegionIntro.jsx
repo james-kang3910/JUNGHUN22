@@ -166,7 +166,7 @@ export default function RegionIntro() {
         </div>
       </div>
       {/* 지역 소개 섹션 */}
-      {(introContent || displaySections.length > 0) && (
+      {(introContent || introImages.length > 0 || displaySections.length > 0) && (
         <div style={{ padding: '16px 16px 0' }}>
           <div style={{ borderLeft: '3px solid #0E7490', paddingLeft: 10, fontSize: 15, fontWeight: 700, color: '#0F172A', marginBottom: 12 }}>
             📝 지역 소개
@@ -176,6 +176,24 @@ export default function RegionIntro() {
               <p style={{ fontSize: 14, color: '#334155', lineHeight: 1.8, margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{introContent}</p>
             ) : (
               <p style={{ fontSize: 13, color: '#94A3B8', margin: 0 }}>등록된 소개 문구가 없습니다.</p>
+            )}
+
+            {introImages.length > 0 && hasSectionImages && (
+              <div style={{ marginTop: introContent ? 12 : 0, display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {introImages.map((img, imgIdx) => {
+                  const src = resolveImageUrl(img);
+                  if (!src) return null;
+                  const label = resolveImageLabel(img, imgIdx);
+                  return (
+                    <article key={`intro-top-img-${imgIdx}`} style={{ borderRadius: 12, border: '1px solid rgba(14,116,144,0.14)', background: 'linear-gradient(180deg, #f8fdff 0%, #f3f8fb 100%)', overflow: 'hidden' }}>
+                      {label ? (
+                        <div style={{ padding: '10px 12px', fontSize: 13, fontWeight: 700, color: '#0E7490', borderBottom: '1px solid rgba(14,116,144,0.10)' }}>{label}</div>
+                      ) : null}
+                      <img src={src} alt={label || `지역 소개 이미지 ${imgIdx + 1}`} style={{ width: '100%', display: 'block', objectFit: 'cover' }} />
+                    </article>
+                  );
+                })}
+              </div>
             )}
           </div>
 

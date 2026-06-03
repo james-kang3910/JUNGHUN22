@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import * as storageAdapter from '../lib/storageAdapter';
+import { resolvePublicAuthorName } from '../lib/noticeUtils';
 import PageHeader from '../components/PageHeader';
 
 console.log('[PAGE]', 'Notices.jsx (active)');
@@ -202,6 +203,7 @@ export default function Notices() {
                 const contentText = String(notice.content || '').trim();
                 const hasLongContent = contentText.length > 90;
                 const noticeImageUrl = resolveNoticeImageUrl(notice.imageUrl || notice.image_url);
+                const publicAuthor = resolvePublicAuthorName(notice.author, notice.authorName, notice.author_name);
                 return (
                 <div
                   key={notice.id}
@@ -306,7 +308,7 @@ export default function Notices() {
                   )}
 
                   <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: 12, color: 'var(--c-tx-d)' }}>
-                    <div>{notice.author || '관리자'}</div>
+                    {publicAuthor ? <div>{publicAuthor}</div> : <div />}
                     <div>
                       {new Date(notice.createdAt).toLocaleDateString('ko-KR', {
                         year: 'numeric',

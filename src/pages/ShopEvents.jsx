@@ -27,8 +27,8 @@ function catColor(category) {
 function normalizeShopAssetUrl(raw) {
   const text = String(raw || '').trim();
   if (!text) return '';
-  if (text.startsWith('/uploads/') && !text.startsWith('/uploads/banners/') && !text.startsWith('/uploads/supplies/') && !text.startsWith('/uploads/videos/')) {
-    const filename = text.replace('/uploads/', '');
+  if (text.startsWith('/uploads/') && !text.slice('/uploads/'.length).includes('/')) {
+    const filename = text.slice('/uploads/'.length);
     return `/uploads/banners/${filename}`;
   }
   return text;
@@ -255,12 +255,12 @@ export default function ShopEvents() {
                       </div>
 
                       {shop.sub && (
-                        <div className="su-shop-desc" style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                        <div className="su-shop-desc su-shop-card__desc">
                           {shop.sub}
                         </div>
                       )}
 
-                      <div className="su-shop-meta" style={{ marginTop: 2, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                      <div className="su-shop-meta su-shop-card__address">
                         📍 {shop.address || '-'}
                       </div>
                     </div>

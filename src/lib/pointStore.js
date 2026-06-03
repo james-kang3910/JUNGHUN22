@@ -65,10 +65,12 @@ export const getUserPointHistory = async (userId) => {
   return ledger.sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
 };
 
+const isActivePointLedgerRow = (row) => String(row?.status || 'active').toLowerCase() !== 'cancelled';
+
 // ★ 특정 회원의 포인트 잔액 계산
 export const getUserBalance = async (userId) => {
   const history = await getUserPointHistory(userId);
-  return history.reduce((sum, h) => sum + (h.status === "completed" ? h.amount : 0), 0);
+  return history.reduce((sum, h) => sum + (isActivePointLedgerRow(h) ? h.amount : 0), 0);
 };
 
 // ★ 현재 로그인 사용자의 포인트 데이터 (My.jsx용)
@@ -79,8 +81,8 @@ export const getCurrentUserPointData = async () => {
   }
   
   const history = await getUserPointHistory(userId);
-  const earned = history.filter(h => h.amount > 0 && h.status === "completed").reduce((sum, h) => sum + h.amount, 0);
-  const spent = Math.abs(history.filter(h => h.amount < 0 && h.status === "completed").reduce((sum, h) => sum + h.amount, 0));
+  const earned = history.filter(h => h.amount > 0 && isActivePointLedgerRow(h)).reduce((sum, h) => sum + h.amount, 0);
+  const spent = Math.abs(history.filter(h => h.amount < 0 && isActivePointLedgerRow(h)).reduce((sum, h) => sum + h.amount, 0));
   const balance = earned - spent;
   
   // My.jsx 형식으로 변환
@@ -177,7 +179,7 @@ export const spendPointsAtShop = async (userId, userName, amount, shopName) => {
 // ★ 전체 통계
 export const getPointStats = async () => {
   const ledger = await getPointLedger();
-  const completedLedger = ledger.filter(l => l.status === "completed");
+  const completedLedger = ledger.filter(isActivePointLedgerRow);
   
   const totalGiven = completedLedger.filter(l => l.amount > 0).reduce((sum, l) => sum + l.amount, 0);
   const totalDeducted = Math.abs(completedLedger.filter(l => l.amount < 0).reduce((sum, l) => sum + l.amount, 0));

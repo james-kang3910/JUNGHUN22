@@ -3,6 +3,8 @@ import { useParams, useNavigate } from "react-router-dom";
 import { fetchCardBySlug, deleteCard } from "../lib/storageAdapter";
 import { getSession } from "../lib/authStore";
 import CardCreateModal from "../components/CardCreateModal";
+import BusinessCardPreview from "../components/BusinessCardPreview";
+import { downloadBusinessCardImage, readCardFieldsFromRecord } from "../lib/businessCardCore";
 import QRCode from "qrcode";
 
 export default function CardPage() {
@@ -111,6 +113,7 @@ export default function CardPage() {
   }
 
   const cardUrl = `${window.location.origin}/card/${card.cardSlug}`;
+  const cardVisual = readCardFieldsFromRecord(card, {});
 
   return (
     <div
@@ -175,8 +178,31 @@ export default function CardPage() {
         </button>
       </div>
 
-      {/* 카드 본체 */}
+      {/* 명함 미리보기 */}
       <div style={{ padding: "24px 20px 0" }}>
+        <BusinessCardPreview form={cardVisual.form} themeKey={cardVisual.themeKey} />
+        <div style={{ display: "flex", gap: 10, marginTop: 14 }}>
+          <button
+            type="button"
+            onClick={() => downloadBusinessCardImage(cardVisual.form, cardVisual.themeKey, card.cardSlug)}
+            style={{ flex: 1, minHeight: 44, borderRadius: 12, border: "none", background: "rgba(255,255,255,0.92)", color: "#0f766e", fontWeight: 800, fontSize: 13, cursor: "pointer" }}
+          >
+            PNG 저장
+          </button>
+          {isOwner ? (
+            <button
+              type="button"
+              onClick={() => setShowEdit(true)}
+              style={{ flex: 1, minHeight: 44, borderRadius: 12, border: "none", background: "linear-gradient(90deg,#0f766e,#14b8a6)", color: "#fff", fontWeight: 800, fontSize: 13, cursor: "pointer" }}
+            >
+              수정
+            </button>
+          ) : null}
+        </div>
+      </div>
+
+      {/* 추가 정보 */}
+      <div style={{ padding: "20px 20px 0" }}>
         <div
           style={{
             background: "linear-gradient(145deg, rgba(255,255,255,0.13) 0%, rgba(255,255,255,0.05) 100%)",
@@ -184,38 +210,12 @@ export default function CardPage() {
             WebkitBackdropFilter: "blur(16px)",
             border: "1px solid rgba(255,255,255,0.20)",
             borderRadius: 24,
-            padding: "28px 24px",
+            padding: "24px 20px",
             color: "#fff",
             boxShadow: "0 8px 32px rgba(0,0,0,0.3)",
           }}
         >
-          {/* 이름/소속 */}
-          <div style={{ display: "flex", alignItems: "flex-start", gap: 16, marginBottom: 20 }}>
-            <div
-              style={{
-                width: 60,
-                height: 60,
-                borderRadius: 18,
-                background: "rgba(255,255,255,0.18)",
-                border: "1px solid rgba(255,255,255,0.3)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: 28,
-                flexShrink: 0,
-              }}
-            >
-              🙂
-            </div>
-            <div style={{ flex: 1, minWidth: 0 }}>
-              <div style={{ fontSize: 22, fontWeight: 900, letterSpacing: -0.5 }}>{card.name}</div>
-              {card.region && (
-                <div style={{ fontSize: 13, opacity: 0.75, marginTop: 3 }}>📍 {card.region}</div>
-              )}
-            </div>
-          </div>
-
-          {/* 소개 */}
+          <div style={{ fontSize: 18, fontWeight: 900, marginBottom: 8 }}>{cardVisual.form.name || card.name}</div>
           {card.bio && (
             <div
               style={{

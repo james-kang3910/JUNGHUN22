@@ -16,6 +16,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import { Outlet, useParams, useNavigate, useLocation } from 'react-router-dom';
 import { RegionProvider } from '../context/RegionContext';
 import PageHeader from '../components/PageHeader';
+import RegionSearchModal from '../components/RegionSearchModal';
 import * as storageAdapter from '../lib/storageAdapter';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 
@@ -111,6 +112,7 @@ export default function RegionLayout() {
   const [districts] = useState([]);
   const [selectedDistrictId] = useState('');
   const [selectedRegionOptionId, setSelectedRegionOptionId] = useState(regionId || '');
+  const [searchOpen, setSearchOpen] = useState(false);
 
   const isSameRegionList = useCallback((left, right) => {
     if (left === right) return true;
@@ -243,7 +245,7 @@ export default function RegionLayout() {
         className="su-regionHeader"
       />
 
-      {/* 다른 지역 이동 드롭다운 */}
+      {/* 다른 지역 이동 + 검색 */}
       <div style={{
         padding: '5px 14px',
         borderBottom: '1px solid #DDE3EA',
@@ -277,7 +279,36 @@ export default function RegionLayout() {
               ))
           }
         </select>
+        <button
+          type="button"
+          aria-label="지역 검색"
+          title="지역 검색"
+          onClick={() => setSearchOpen(true)}
+          style={{
+            flexShrink: 0,
+            width: 38,
+            height: 34,
+            borderRadius: 8,
+            border: '1px solid #DDE3EA',
+            background: '#F8FAFC',
+            color: '#0E7490',
+            fontSize: 16,
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+          }}
+        >
+          🔍
+        </button>
       </div>
+
+      <RegionSearchModal
+        regionId={regionId}
+        regionName={regionName}
+        open={searchOpen}
+        onClose={() => setSearchOpen(false)}
+      />
 
       {/* 탭바 */}
       <nav className="su-regionTabBar">

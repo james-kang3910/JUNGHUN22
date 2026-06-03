@@ -415,6 +415,16 @@ function isRegionManagerRole(role) {
   return String(role || '').toUpperCase() === 'REGION_MANAGER';
 }
 
+function generateTemporaryPassword(len = 10) {
+  const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+  let out = '';
+  const bytes = crypto.randomBytes(len);
+  for (let i = 0; i < len; i++) {
+    out += chars[bytes[i] % chars.length];
+  }
+  return out;
+}
+
 async function canModerateAuditionSubmission(memberId, role, submissionId) {
   const normalizedRole = String(role || '').toUpperCase();
   if (isAdminRole(normalizedRole)) return true;
@@ -507,6 +517,32 @@ async function getOptionalAuth(req) {
     memberId: String(row.member_id || row.memberId || ''),
     role: String(row.role || 'USER').toUpperCase(),
   };
+}
+
+function isPointsTransferEnabledValue(raw) {
+  const value = String(raw ?? 'true').trim().toLowerCase();
+  return !['false', '0', 'off', 'no', 'disabled'].includes(value);
+}
+
+function canViewMemberPoints(auth, targetMemberId) {
+  if (targetMemberId === 'all') return isAdminRole(auth?.role);
+  return String(auth?.memberId || '') === String(targetMemberId) || isAdminRole(auth?.role);
+}
+
+async function lockMemberPointLedger(memberId) {
+  if (!memberId || !USE_POSTGRES) return;
+  await db.run(
+    `SELECT ledger_id FROM point_ledger WHERE member_id = $1 FOR UPDATE`,
+    [memberId]
+  );
+}
+
+async function getMemberPointBalance(memberId) {
+  const balanceQuery = USE_POSTGRES
+    ? "SELECT COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 0 ELSE amount END), 0) as balance FROM point_ledger WHERE member_id = $1"
+    : "SELECT COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 0 ELSE amount END), 0) as balance FROM point_ledger WHERE memberId = ?";
+  const balanceRow = await db.get(balanceQuery, [memberId]);
+  return Number(balanceRow?.balance || 0);
 }
 
 async function canManageApartmentRegion(memberId, role, regionId) {
@@ -1546,6 +1582,8 @@ async function initDatabase() {
         try { await db.run(`ALTER TABLE banners ADD COLUMN gradientStop1 INTEGER DEFAULT 0`); } catch (e) {}
         try { await db.run(`ALTER TABLE banners ADD COLUMN gradientStop2 INTEGER DEFAULT 100`); } catch (e) {}
         try { await db.run(`ALTER TABLE banners ADD COLUMN chipLabel TEXT DEFAULT NULL`); } catch (e) {}
+        try { await db.run(`ALTER TABLE banners ADD COLUMN type TEXT DEFAULT 'main'`); } catch (e) {}
+        try { await db.run(`ALTER TABLE banners ADD COLUMN regionId TEXT DEFAULT NULL`); } catch (e) {}
       }
       logger.info('banners table ensured');
     } catch (e) {
@@ -1569,6 +1607,7 @@ async function initDatabase() {
         `);
         await db.run(`CREATE INDEX IF NOT EXISTS idx_reviews_shop ON reviews(shop_id, created_at DESC)`);
         await db.run(`CREATE INDEX IF NOT EXISTS idx_reviews_member ON reviews(member_id)`);
+        try { await db.run(`ALTER TABLE reviews ADD COLUMN IF NOT EXISTS images TEXT DEFAULT '[]'`); } catch (e) {}
       } else {
         await db.run(`
           CREATE TABLE IF NOT EXISTS reviews (
@@ -1584,6 +1623,7 @@ async function initDatabase() {
           )
         `);
         await db.run(`CREATE INDEX IF NOT EXISTS idx_reviews_shop ON reviews(shopId)`);
+        try { await db.run(`ALTER TABLE reviews ADD COLUMN images TEXT DEFAULT '[]'`); } catch (e) {}
       }
       logger.info('reviews table ensured');
     } catch (e) {
@@ -4534,6 +4574,88 @@ app.patch('/api/admin/members/:id/role', async (req, res) => {
   }
 });
 
+// POST /api/admin/members/:id/reset-password — 관리자 임시 비밀번호 발급
+app.post('/api/admin/members/:id/reset-password', async (req, res) => {
+  try {
+    const token = req.headers['x-admin-token'] || req.headers.authorization?.replace('Bearer ', '');
+    if (!token) return res.status(401).json({ error: '인증이 필요합니다.' });
+    const sessionRow = USE_POSTGRES
+      ? await db.get(
+          'SELECT s.member_id, m.role, m.email FROM sessions s JOIN members m ON s.member_id = m.member_id WHERE s.session_id = $1 AND s.status = $2',
+          [token, 'ACTIVE']
+        )
+      : await db.get(
+          'SELECT s.memberId AS member_id, m.role, m.email FROM sessions s JOIN members m ON s.memberId = m.memberId WHERE s.sessionId = ? AND s.status = ?',
+          [token, 'ACTIVE']
+        );
+    if (!sessionRow) return res.status(401).json({ error: '세션이 만료되었습니다.' });
+
+    const requesterRole = String(sessionRow.role || 'USER').toUpperCase();
+    if (!isAdminRole(requesterRole)) {
+      return res.status(403).json({ error: '관리자만 임시 비밀번호를 발급할 수 있습니다.' });
+    }
+
+    const targetId = String(req.params.id || '').trim();
+    if (!targetId) return res.status(400).json({ error: '회원 ID가 필요합니다.' });
+
+    const _saEmails = (process.env.SUPER_ADMIN_EMAIL || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const _wIds = (process.env.SUPER_ADMIN_MEMBER_ID || '').split(',').map(s => s.trim()).filter(Boolean);
+
+    const requesterIsWebsiteAdmin = _wIds.includes(String(sessionRow.member_id))
+      || _saEmails.includes((sessionRow.email || '').toLowerCase())
+      || requesterRole === 'WEBSITE_ADMIN';
+
+    const targetRow = USE_POSTGRES
+      ? await db.get('SELECT member_id, email, role, status FROM members WHERE member_id = $1', [targetId])
+      : await db.get('SELECT memberId AS member_id, email, role, status FROM members WHERE memberId = ?', [targetId]);
+    if (!targetRow) return res.status(404).json({ error: '회원을 찾을 수 없습니다.' });
+
+    const targetIsWebsiteAdmin = _wIds.includes(String(targetId))
+      || _saEmails.includes((targetRow.email || '').toLowerCase())
+      || String(targetRow.role || '').toUpperCase() === 'WEBSITE_ADMIN';
+
+    if (targetIsWebsiteAdmin && !requesterIsWebsiteAdmin) {
+      return res.status(403).json({ error: '웹사이트 관리자 계정의 비밀번호는 발급할 수 없습니다.' });
+    }
+
+    const ROLE_LEVEL = { USER: 0, REGION_MANAGER: 1, REGION_ADMIN: 2, ADMIN: 3, SUPER_ADMIN: 4, WEBSITE_ADMIN: 5 };
+    const requesterLevel = requesterIsWebsiteAdmin ? ROLE_LEVEL.WEBSITE_ADMIN : (ROLE_LEVEL[requesterRole] ?? 0);
+    const targetLevel = targetIsWebsiteAdmin ? ROLE_LEVEL.WEBSITE_ADMIN : (ROLE_LEVEL[String(targetRow.role || 'USER').toUpperCase()] ?? 0);
+    if (targetLevel >= requesterLevel) {
+      return res.status(403).json({ error: '자신과 동급 이상 계정의 비밀번호는 발급할 수 없습니다.' });
+    }
+
+    const temporaryPassword = generateTemporaryPassword(10);
+    const passwordHash = await bcrypt.hash(temporaryPassword, 10);
+    const now = new Date().toISOString();
+
+    if (USE_POSTGRES) {
+      await db.run(
+        'UPDATE members SET password_hash = $1, must_change_password = true, updated_at = $2 WHERE member_id = $3',
+        [passwordHash, now, targetId]
+      );
+      await db.run('DELETE FROM sessions WHERE member_id = $1', [targetId]).catch(() => {});
+    } else {
+      await db.run(
+        'UPDATE members SET passwordHash = ?, mustChangePassword = 1, updatedAt = ? WHERE memberId = ?',
+        [passwordHash, now, targetId]
+      );
+      await db.run('DELETE FROM sessions WHERE memberId = ?', [targetId]).catch(() => {});
+    }
+
+    logger.info(`[RESET-PW] member ${targetId} temp password issued by admin ${sessionRow.member_id}`);
+    return jsonOk(res, {
+      memberId: targetId,
+      email: targetRow.email,
+      temporaryPassword,
+      mustChangePassword: true,
+    });
+  } catch (err) {
+    logger.error('Error resetting member password:', err);
+    return jsonFail(res, 500, err.message);
+  }
+});
+
 // GET /api/admin/members/:id/region-assignments — 지역관리자 배정 목록
 app.get('/api/admin/members/:id/region-assignments', async (req, res) => {
   try {
@@ -7353,7 +7475,7 @@ app.get('/api/shops/:shopId/qr', async (req, res) => {
 });
 
 // POST /api/payments/qr - QR 결제 처리 (서명 검증 후 상점 적립)
-app.post('/api/payments/qr', async (req, res) => {
+app.post('/api/payments/qr', requireAuth, async (req, res) => {
   try {
     const { qrPayload, amount } = req.body || {};
     const amt = Number(amount);
@@ -7371,82 +7493,93 @@ app.post('/api/payments/qr', async (req, res) => {
     );
     if (!shop) return res.status(404).json({ error: 'Shop not found' });
 
-    const payerMemberId = req.headers['x-member-id'] ? String(req.headers['x-member-id']) : null;
-    
-    // 유저 포인트 잔액 확인 (필수 — SSOT)
+    const payerMemberId = String(req.authMemberId || '').trim();
     if (!payerMemberId) {
-      return res.status(400).json({ error: 'x-member-id header required for payment' });
+      return res.status(401).json({ error: 'Unauthorized: 로그인이 필요합니다.' });
     }
-    const balanceQuery = USE_POSTGRES
-      ? "SELECT COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 0 ELSE amount END), 0) as balance FROM point_ledger WHERE member_id = $1"
-      : "SELECT COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 0 ELSE amount END), 0) as balance FROM point_ledger WHERE memberId = ?";
-    const balanceRow = await db.get(balanceQuery, [payerMemberId]);
-    const currentBalance = Number(balanceRow?.balance || 0);
-    
-    if (currentBalance < amt) {
-      return res.status(400).json({ error: '포인트 잔액이 부족합니다.', required: amt, available: currentBalance });
+    const headerMemberId = req.headers['x-member-id'] ? String(req.headers['x-member-id']).trim() : '';
+    if (headerMemberId && headerMemberId !== payerMemberId) {
+      return res.status(403).json({ error: '결제 회원 정보가 세션과 일치하지 않습니다.' });
     }
 
     const paymentId = `QRPAY_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
     const now = new Date().toISOString();
     const shopName = USE_POSTGRES ? shop.name : shop.name;
-
-    // 원자적 이중 기장 (BEGIN TRANSACTION)
-    // 1) qr_payments 기록
-    if (USE_POSTGRES) {
-      await db.run(
-        `INSERT INTO qr_payments(payment_id, shop_id, amount, payer_member_id, status, created_at)
-         VALUES($1, $2, $3, $4, 'completed', $5)`
-        , [paymentId, shopId, Math.trunc(amt), payerMemberId, now]
-      );
-    } else {
-      await db.run(
-        `INSERT INTO qr_payments(payment_id, shop_id, amount, payer_member_id, status, created_at)
-         VALUES(?, ?, ?, ?, 'completed', ?)`
-        , [paymentId, shopId, Math.trunc(amt), payerMemberId, now]
-      );
-    }
-
-    // 2) shop_earnings 적립 (+amount)
-    const sourceTxId = paymentId;
-    if (USE_POSTGRES) {
-      await db.run(
-        `INSERT INTO shop_earnings(shop_id, shop_name, amount, source_tx_id, buyer_member_id, status, created_at)
-         VALUES($1, $2, $3, $4, $5, 'active', $6)`
-        , [shopId, shopName, Math.trunc(amt), sourceTxId, payerMemberId, now]
-      );
-    } else {
-      await db.run(
-        `INSERT INTO shop_earnings(shop_id, shop_name, amount, source_tx_id, buyer_member_id, status, created_at)
-         VALUES(?, ?, ?, ?, ?, 'active', ?)`
-        , [shopId, shopName, Math.trunc(amt), sourceTxId, payerMemberId, now]
-      );
-    }
-
-    // 3) point_ledger 유저 포인트 차감 (-amount) — CRITICAL FIX
     const description = `상점 ${shopName || shopId} QR 결제`;
+    const debitAmount = Math.abs(Math.trunc(amt));
+
+    await syncPointLedgerSeq();
+
+    let currentBalance = 0;
     if (USE_POSTGRES) {
-      await db.run(
-        `INSERT INTO point_ledger(member_id, amount, type, description, reference_id, reference_type, status, created_at)
-         VALUES($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [payerMemberId, -Math.abs(Math.trunc(amt)), 'PAYMENT', description, paymentId, 'QR_PAYMENT', 'active', now]
-      );
+      await db.run('BEGIN');
+      try {
+        await lockMemberPointLedger(payerMemberId);
+        currentBalance = await getMemberPointBalance(payerMemberId);
+        if (currentBalance < debitAmount) {
+          await db.run('ROLLBACK');
+          return res.status(400).json({ error: '포인트 잔액이 부족합니다.', required: debitAmount, available: currentBalance });
+        }
+
+        await db.run(
+          `INSERT INTO qr_payments(payment_id, shop_id, amount, payer_member_id, status, created_at)
+           VALUES($1, $2, $3, $4, 'completed', $5)`,
+          [paymentId, shopId, debitAmount, payerMemberId, now]
+        );
+        await db.run(
+          `INSERT INTO shop_earnings(shop_id, shop_name, amount, source_tx_id, buyer_member_id, status, created_at)
+           VALUES($1, $2, $3, $4, $5, 'active', $6)`,
+          [shopId, shopName, debitAmount, paymentId, payerMemberId, now]
+        );
+        await db.run(
+          `INSERT INTO point_ledger(member_id, amount, type, description, reference_id, reference_type, status, created_at)
+           VALUES($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [payerMemberId, -debitAmount, 'PAYMENT', description, paymentId, 'QR_PAYMENT', 'active', now]
+        );
+        await db.run('COMMIT');
+      } catch (error) {
+        await db.run('ROLLBACK');
+        throw error;
+      }
     } else {
-      await db.run(
-        `INSERT INTO point_ledger(memberId, amount, type, description, referenceId, referenceType, status, createdAt)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-        [payerMemberId, -Math.abs(Math.trunc(amt)), 'PAYMENT', description, paymentId, 'QR_PAYMENT', 'active', now]
-      );
+      await db.run('BEGIN');
+      try {
+        currentBalance = await getMemberPointBalance(payerMemberId);
+        if (currentBalance < debitAmount) {
+          await db.run('ROLLBACK');
+          return res.status(400).json({ error: '포인트 잔액이 부족합니다.', required: debitAmount, available: currentBalance });
+        }
+
+        await db.run(
+          `INSERT INTO qr_payments(payment_id, shop_id, amount, payer_member_id, status, created_at)
+           VALUES(?, ?, ?, ?, 'completed', ?)`,
+          [paymentId, shopId, debitAmount, payerMemberId, now]
+        );
+        await db.run(
+          `INSERT INTO shop_earnings(shop_id, shop_name, amount, source_tx_id, buyer_member_id, status, created_at)
+           VALUES(?, ?, ?, ?, ?, 'active', ?)`,
+          [shopId, shopName, debitAmount, paymentId, payerMemberId, now]
+        );
+        await db.run(
+          `INSERT INTO point_ledger(memberId, amount, type, description, referenceId, referenceType, status, createdAt)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+          [payerMemberId, -debitAmount, 'PAYMENT', description, paymentId, 'QR_PAYMENT', 'active', now]
+        );
+        await db.run('COMMIT');
+      } catch (error) {
+        await db.run('ROLLBACK');
+        throw error;
+      }
     }
 
     logForensicWrite({
       route: '/api/payments/qr',
       method: 'POST',
       body: req.body || {},
-      sql: 'INSERT qr_payments + INSERT shop_earnings + INSERT point_ledger (user debit)',
-      params: { paymentId, shopId, amount: Math.trunc(amt), payerMemberId },
+      sql: 'BEGIN; qr_payments + shop_earnings + point_ledger (user debit); COMMIT',
+      params: { paymentId, shopId, amount: debitAmount, payerMemberId },
       dbResult: null,
-      result: { ok: true, success: true, id: paymentId, shopId, amount: Math.trunc(amt), userBalance: currentBalance - Math.trunc(amt) },
+      result: { ok: true, success: true, id: paymentId, shopId, amount: debitAmount, userBalance: currentBalance - debitAmount },
     });
 
     res.json({ 
@@ -7454,8 +7587,8 @@ app.post('/api/payments/qr', async (req, res) => {
       success: true, 
       id: paymentId, 
       shopId, 
-      amount: Math.trunc(amt),
-      userBalance: currentBalance - Math.trunc(amt),
+      amount: debitAmount,
+      userBalance: currentBalance - debitAmount,
       message: '결제 완료 (유저 포인트 차감 + 상점 포인트 적립)'
     });
   } catch (err) {
@@ -7809,7 +7942,7 @@ app.post('/api/vouchers/use', async (req, res) => {
   }
 });
 
-app.post('/api/vouchers/transfer', async (req, res) => {
+app.post('/api/vouchers/transfer', requireAuth, async (req, res) => {
   try {
     const {
       fromMemberId,
@@ -7827,7 +7960,15 @@ app.post('/api/vouchers/transfer', async (req, res) => {
     } = req.body || {};
 
     const resolvedTargetType = String(targetType || 'member').trim().toLowerCase() === 'shop' ? 'shop' : 'member';
-    const senderId = String(fromMemberId || '').trim();
+    const sessionSenderId = String(req.authMemberId || '').trim();
+    const bodySenderId = String(fromMemberId || '').trim();
+    const senderId = isAdminRole(req.authRole) && bodySenderId ? bodySenderId : sessionSenderId;
+    if (!senderId) {
+      return res.status(401).json({ error: 'Unauthorized: 로그인이 필요합니다.' });
+    }
+    if (!isAdminRole(req.authRole) && bodySenderId && bodySenderId !== sessionSenderId) {
+      return res.status(403).json({ error: '본인 계정으로만 이용권을 전송할 수 있습니다.' });
+    }
     const receiverId = String(resolvedTargetType === 'shop' ? (shopId || '') : (toMemberId || '')).trim();
     const qty = Number(amount);
     const refId = String(referenceId || '').trim();
@@ -8189,6 +8330,35 @@ app.patch('/api/shops/:id/voucher-count', async (req, res) => {
 // REVIEWS API
 // ============================================
 
+function parseReviewImages(raw, max = 5) {
+  let value = raw;
+  for (let i = 0; i < 2; i += 1) {
+    if (typeof value !== 'string') break;
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    try {
+      value = JSON.parse(trimmed);
+    } catch (e) {
+      break;
+    }
+  }
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item) => {
+      if (typeof item === 'string') return item.trim();
+      if (item && typeof item === 'object') return String(item.url || item.imageUrl || '').trim();
+      return '';
+    })
+    .filter(Boolean)
+    .slice(0, max);
+}
+
+function normalizeReviewRow(row) {
+  if (!row) return row;
+  const images = parseReviewImages(row.images);
+  return { ...row, images };
+}
+
 // GET /api/shops/:id/reviews - 특정 상점의 리뷰 조회
 app.get('/api/shops/:id/reviews', async (req, res) => {
   try {
@@ -8200,7 +8370,7 @@ app.get('/api/shops/:id/reviews', async (req, res) => {
     if (USE_POSTGRES) {
       query = `
         SELECT review_id AS "reviewId", shop_id AS "shopId", member_id AS "memberId", 
-               author_name AS "authorName", content, rating, status, 
+               author_name AS "authorName", content, rating, status, images,
                created_at AS "createdAt", updated_at AS "updatedAt"
         FROM reviews 
         WHERE shop_id = $1 AND status = 'visible'
@@ -8211,7 +8381,7 @@ app.get('/api/shops/:id/reviews', async (req, res) => {
       params = after ? [shopId, limit, after] : [shopId, limit];
     } else {
       query = `
-        SELECT reviewId, shopId, memberId, authorName, content, rating, status, createdAt, updatedAt
+        SELECT reviewId, shopId, memberId, authorName, content, rating, status, images, createdAt, updatedAt
         FROM reviews 
         WHERE shopId = ? AND status = 'visible'
         ${after ? 'AND createdAt < ?' : ''}
@@ -8222,7 +8392,7 @@ app.get('/api/shops/:id/reviews', async (req, res) => {
     }
     
     const rows = await db.query(query, params);
-    res.json(rows || []);
+    res.json((rows || []).map(normalizeReviewRow));
   } catch (err) {
     logger.error('Error fetching reviews:', err);
     res.status(500).json({ error: err.message });
@@ -8234,7 +8404,7 @@ app.post('/api/shops/:id/reviews', async (req, res) => {
   try {
     const shopId = req.params.id;
     const memberId = req.headers['x-member-id'];
-    const { content, rating, authorName } = req.body || {};
+    const { content, rating, authorName, images: rawImages } = req.body || {};
     
     if (!memberId) {
       return res.status(401).json({ error: 'Unauthorized: memberId required' });
@@ -8260,16 +8430,19 @@ app.post('/api/shops/:id/reviews', async (req, res) => {
     if (rating === undefined || rating < 1 || rating > 5) {
       return res.status(400).json({ error: 'rating must be between 1 and 5' });
     }
+
+    const reviewImages = parseReviewImages(rawImages, 5);
+    const imagesJson = JSON.stringify(reviewImages);
     
     const reviewId = `REVIEW_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
     const now = new Date().toISOString();
     
     if (USE_POSTGRES) {
       const query = `
-        INSERT INTO reviews(review_id, shop_id, member_id, author_name, content, rating, status, created_at, updated_at)
-        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        INSERT INTO reviews(review_id, shop_id, member_id, author_name, content, rating, status, images, created_at, updated_at)
+        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING review_id AS "reviewId", shop_id AS "shopId", member_id AS "memberId", 
-                  author_name AS "authorName", content, rating, status, 
+                  author_name AS "authorName", content, rating, status, images,
                   created_at AS "createdAt", updated_at AS "updatedAt"
       `;
       const rows = await db.query(query, [
@@ -8280,6 +8453,7 @@ app.post('/api/shops/:id/reviews', async (req, res) => {
         content.trim(),
         rating,
         'visible',
+        imagesJson,
         now,
         now
       ]);
@@ -8291,11 +8465,11 @@ app.post('/api/shops/:id/reviews', async (req, res) => {
          WHERE shop_id = $1`,
         [shopId]
       );
-      res.json(rows[0]);
+      res.json(normalizeReviewRow(rows[0]));
     } else {
       const query = `
-        INSERT INTO reviews(reviewId, shopId, memberId, authorName, content, rating, status, createdAt, updatedAt)
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO reviews(reviewId, shopId, memberId, authorName, content, rating, status, images, createdAt, updatedAt)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `;
       await db.run(query, [
         reviewId,
@@ -8305,10 +8479,11 @@ app.post('/api/shops/:id/reviews', async (req, res) => {
         content.trim(),
         rating,
         'visible',
+        imagesJson,
         now,
         now
       ]);
-      res.json({
+      res.json(normalizeReviewRow({
         reviewId,
         shopId,
         memberId,
@@ -8316,12 +8491,88 @@ app.post('/api/shops/:id/reviews', async (req, res) => {
         content: content.trim(),
         rating,
         status: 'visible',
+        images: imagesJson,
         createdAt: now,
         updatedAt: now
-      });
+      }));
     }
   } catch (err) {
     logger.error('Error creating review:', err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// PATCH /api/shops/:id/reviews/:reviewId - 리뷰 수정 (작성자 본인)
+app.patch('/api/shops/:id/reviews/:reviewId', requireAuth, async (req, res) => {
+  try {
+    const { id: shopId, reviewId } = req.params;
+    const { content, rating, images: rawImages } = req.body || {};
+
+    const checkQuery = USE_POSTGRES
+      ? `SELECT member_id, status FROM reviews WHERE review_id = $1 AND shop_id = $2`
+      : `SELECT memberId, status FROM reviews WHERE reviewId = ? AND shopId = ?`;
+    const existing = await db.get(checkQuery, [reviewId, shopId]);
+
+    if (!existing) {
+      return res.status(404).json({ error: 'Review not found' });
+    }
+
+    const reviewStatus = USE_POSTGRES ? existing.status : existing.status;
+    if (reviewStatus === 'removed') {
+      return res.status(404).json({ error: 'Review not found' });
+    }
+
+    const reviewMemberId = String(USE_POSTGRES ? existing.member_id : existing.memberId);
+    if (!isAdminRole(req.authRole) && reviewMemberId !== req.authMemberId) {
+      return res.status(403).json({ error: '본인 후기만 수정할 수 있습니다.' });
+    }
+
+    if (!content || !String(content).trim()) {
+      return res.status(400).json({ error: 'content required' });
+    }
+    if (String(content).length > 1000) {
+      return res.status(400).json({ error: 'content too long (max 1000 chars)' });
+    }
+    if (rating === undefined || rating < 1 || rating > 5) {
+      return res.status(400).json({ error: 'rating must be between 1 and 5' });
+    }
+
+    const reviewImages = parseReviewImages(rawImages, 5);
+    const imagesJson = JSON.stringify(reviewImages);
+    const now = new Date().toISOString();
+
+    if (USE_POSTGRES) {
+      const rows = await db.query(
+        `UPDATE reviews
+         SET content = $1, rating = $2, images = $3, updated_at = $4
+         WHERE review_id = $5
+         RETURNING review_id AS "reviewId", shop_id AS "shopId", member_id AS "memberId",
+                   author_name AS "authorName", content, rating, status, images,
+                   created_at AS "createdAt", updated_at AS "updatedAt"`,
+        [String(content).trim(), rating, imagesJson, now, reviewId]
+      );
+      await db.query(
+        `UPDATE shops SET
+          rating = (SELECT ROUND(AVG(r.rating)::numeric,1) FROM reviews r WHERE r.shop_id=$1 AND r.status='visible'),
+          review_count = (SELECT COUNT(*) FROM reviews r WHERE r.shop_id=$1 AND r.status='visible')
+         WHERE shop_id = $1`,
+        [shopId]
+      );
+      res.json(normalizeReviewRow(rows[0]));
+    } else {
+      await db.run(
+        `UPDATE reviews SET content = ?, rating = ?, images = ?, updatedAt = ? WHERE reviewId = ?`,
+        [String(content).trim(), rating, imagesJson, now, reviewId]
+      );
+      const row = await db.get(
+        `SELECT reviewId, shopId, memberId, authorName, content, rating, status, images, createdAt, updatedAt
+         FROM reviews WHERE reviewId = ?`,
+        [reviewId]
+      );
+      res.json(normalizeReviewRow(row));
+    }
+  } catch (err) {
+    logger.error('Error updating review:', err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -8342,8 +8593,24 @@ app.delete('/api/shops/:id/reviews/:reviewId', requireAuth, async (req, res) => 
     }
     
     const reviewMemberId = String(USE_POSTGRES ? existing.member_id : existing.memberId);
-    if (!isAdminRole(req.authRole) && reviewMemberId !== req.authMemberId) {
-      return res.status(403).json({ error: 'Forbidden: You do not own this review' });
+    const isReviewAuthor = reviewMemberId === req.authMemberId;
+
+    if (!isAdminRole(req.authRole) && !isReviewAuthor) {
+      const shopRow = await db.get(
+        USE_POSTGRES
+          ? 'SELECT owner_id, created_by FROM shops WHERE shop_id = $1'
+          : 'SELECT ownerId, createdBy FROM shops WHERE shopId = ?',
+        [shopId]
+      );
+      if (!shopRow) {
+        return res.status(404).json({ error: 'Shop not found' });
+      }
+      const ownerId = String(USE_POSTGRES ? shopRow.owner_id : shopRow.ownerId || '');
+      const createdBy = String(USE_POSTGRES ? shopRow.created_by : shopRow.createdBy || '');
+      const isShopOwner = req.authMemberId === ownerId || req.authMemberId === createdBy;
+      if (!isShopOwner) {
+        return res.status(403).json({ error: '후기를 삭제할 권한이 없습니다.' });
+      }
     }
     
     // Soft delete: status를 'removed'로 변경
@@ -8800,8 +9067,8 @@ app.post('/api/shops/:shopId/payout-requests', async (req, res) => {
     
     const pendingPaid = await db.get(
       USE_POSTGRES
-        ? `SELECT COALESCE(SUM(amount), 0) as total FROM shop_payout_requests WHERE shop_id = $1 AND status IN ('PENDING', 'COMPLETED')`
-        : `SELECT COALESCE(SUM(amount), 0) as total FROM shop_payout_requests WHERE shop_id = ? AND status IN ('PENDING', 'COMPLETED')`,
+        ? `SELECT COALESCE(SUM(amount), 0) as total FROM shop_payout_requests WHERE shop_id = $1 AND status IN ('PAID', 'PENDING')`
+        : `SELECT COALESCE(SUM(amount), 0) as total FROM shop_payout_requests WHERE shop_id = ? AND status IN ('PAID', 'PENDING')`,
       [shopId]
     );
     
@@ -9778,6 +10045,315 @@ app.get('/api/search', async (req, res) => {
   } catch (err) {
     logger.error('Error in /api/search:', err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// GET /api/regions/:regionId/search?q=검색어 — 현재 지역 내 통합 검색
+app.get('/api/regions/:regionId/search', async (req, res) => {
+  try {
+    const regionId = String(req.params.regionId || '').trim();
+    const q = String(req.query.q || '').trim();
+    if (!regionId) return res.status(400).json({ error: 'regionId required' });
+    if (!q || q.length < 1) return res.json({ results: [], query: q, regionId });
+
+    const results = [];
+    const like = `%${q}%`;
+    const regionIdsJson = JSON.stringify([regionId]);
+    const limit = 12;
+    const push = (item) => results.push(item);
+
+    // 상점
+    try {
+      const query = USE_POSTGRES
+        ? `SELECT shop_id, name, category, address FROM shops
+           WHERE CAST(region_id AS TEXT) = $2
+             AND (name ILIKE $1 OR category ILIKE $1 OR address ILIKE $1 OR description ILIKE $1)
+           LIMIT ${limit}`
+        : `SELECT shopId, name, category, address FROM shops
+           WHERE CAST(regionId AS TEXT) = ?
+             AND (name LIKE ? OR category LIKE ? OR address LIKE ? OR description LIKE ?)
+           LIMIT ${limit}`;
+      const rows = USE_POSTGRES
+        ? await db.query(query, [like, regionId])
+        : await db.query(query, [regionId, like, like, like, like]);
+      (rows || []).forEach((r) => push({
+        type: 'shop',
+        id: String(r.shop_id || r.shopId),
+        title: r.name,
+        subtitle: r.category || '상점',
+        detail: r.address || '',
+        url: `/r/${regionId}/shops`,
+      }));
+    } catch (e) { /* noop */ }
+
+    // 미션
+    try {
+      const query = USE_POSTGRES
+        ? `SELECT mission_id, title, description FROM missions
+           WHERE (title ILIKE $1 OR description ILIKE $1)
+             AND (
+               region_scope = 'ALL'
+               OR CAST(region_id AS TEXT) = $2
+               OR region_ids @> $3::jsonb
+             )
+           LIMIT ${limit}`
+        : `SELECT missionId, title, description FROM missions
+           WHERE (title LIKE ? OR description LIKE ?)
+             AND (
+               regionScope = 'ALL'
+               OR CAST(regionId AS TEXT) = ?
+               OR regionIds LIKE ?
+             )
+           LIMIT ${limit}`;
+      const rows = USE_POSTGRES
+        ? await db.query(query, [like, regionId, regionIdsJson])
+        : await db.query(query, [like, like, regionId, `%${regionId}%`]);
+      (rows || []).forEach((r) => push({
+        type: 'mission',
+        id: String(r.mission_id || r.missionId),
+        title: r.title,
+        subtitle: '미션',
+        detail: (r.description || '').slice(0, 80),
+        url: `/r/${regionId}/missions`,
+      }));
+    } catch (e) { /* noop */ }
+
+    // 커뮤니티 게시글
+    try {
+      const query = USE_POSTGRES
+        ? `SELECT board_id, title, content FROM boards
+           WHERE CAST(region_id AS TEXT) = $2 AND (title ILIKE $1 OR content ILIKE $1)
+           LIMIT ${limit}`
+        : `SELECT boardId, title, content FROM boards
+           WHERE CAST(regionId AS TEXT) = ? AND (title LIKE ? OR content LIKE ?)
+           LIMIT ${limit}`;
+      const rows = USE_POSTGRES
+        ? await db.query(query, [like, regionId])
+        : await db.query(query, [regionId, like, like]);
+      (rows || []).forEach((r) => push({
+        type: 'board',
+        id: String(r.board_id || r.boardId),
+        title: r.title,
+        subtitle: '커뮤니티',
+        detail: (r.content || '').slice(0, 80),
+        url: `/r/${regionId}/board/${r.board_id || r.boardId}`,
+      }));
+    } catch (e) { /* noop */ }
+
+    // 공지 (전체 + 해당 지역)
+    try {
+      const query = USE_POSTGRES
+        ? `SELECT id, title, content FROM notices
+           WHERE (title ILIKE $1 OR content ILIKE $1)
+             AND UPPER(COALESCE(status, 'ACTIVE')) = 'ACTIVE'
+             AND (
+               scope = 'ALL'
+               OR CAST(region_id AS TEXT) = $2
+               OR region_ids @> $3::jsonb
+             )
+           LIMIT ${limit}`
+        : `SELECT id, title, content FROM notices
+           WHERE (title LIKE ? OR content LIKE ?)
+             AND UPPER(COALESCE(status, 'ACTIVE')) = 'ACTIVE'
+             AND (
+               scope = 'ALL'
+               OR CAST(region_id AS TEXT) = ?
+               OR region_ids LIKE ?
+             )
+           LIMIT ${limit}`;
+      const rows = USE_POSTGRES
+        ? await db.query(query, [like, regionId, regionIdsJson])
+        : await db.query(query, [like, like, regionId, `%${regionId}%`]);
+      (rows || []).forEach((r) => push({
+        type: 'notice',
+        id: String(r.id),
+        title: r.title,
+        subtitle: '공지사항',
+        detail: (r.content || '').slice(0, 80),
+        url: `/r/${regionId}/notices`,
+      }));
+    } catch (e) { /* noop */ }
+
+    // 지역 이벤트
+    try {
+      const query = USE_POSTGRES
+        ? `SELECT event_id, title, content FROM region_events
+           WHERE region_id = $2 AND (title ILIKE $1 OR content ILIKE $1)
+           LIMIT ${limit}`
+        : `SELECT event_id, title, content FROM region_events
+           WHERE region_id = ? AND (title LIKE ? OR content LIKE ?)
+           LIMIT ${limit}`;
+      const rows = USE_POSTGRES
+        ? await db.query(query, [like, regionId])
+        : await db.query(query, [regionId, like, like]);
+      (rows || []).forEach((r) => push({
+        type: 'event',
+        id: String(r.event_id),
+        title: r.title,
+        subtitle: '이벤트',
+        detail: (r.content || '').slice(0, 80),
+        url: `/r/${regionId}/events`,
+      }));
+    } catch (e) { /* noop */ }
+
+    // 지역행사
+    try {
+      const query = USE_POSTGRES
+        ? `SELECT festival_id, title, description, location FROM region_festivals
+           WHERE region_id = $2 AND (title ILIKE $1 OR description ILIKE $1 OR location ILIKE $1)
+           LIMIT ${limit}`
+        : `SELECT festival_id, title, description, location FROM region_festivals
+           WHERE region_id = ? AND (title LIKE ? OR description LIKE ? OR location LIKE ?)
+           LIMIT ${limit}`;
+      const rows = USE_POSTGRES
+        ? await db.query(query, [like, regionId])
+        : await db.query(query, [regionId, like, like, like]);
+      (rows || []).forEach((r) => push({
+        type: 'festival',
+        id: String(r.festival_id),
+        title: r.title,
+        subtitle: '지역행사',
+        detail: (r.description || r.location || '').slice(0, 80),
+        url: `/r/${regionId}/festivals`,
+      }));
+    } catch (e) { /* noop */ }
+
+    // 전단
+    try {
+      const query = USE_POSTGRES
+        ? `SELECT flyer_id, title, shop_name, category FROM region_flyers
+           WHERE region_id = $2 AND (title ILIKE $1 OR shop_name ILIKE $1 OR category ILIKE $1)
+           LIMIT ${limit}`
+        : `SELECT flyer_id, title, shop_name, category FROM region_flyers
+           WHERE region_id = ? AND (title LIKE ? OR shop_name LIKE ? OR category LIKE ?)
+           LIMIT ${limit}`;
+      const rows = USE_POSTGRES
+        ? await db.query(query, [like, regionId])
+        : await db.query(query, [regionId, like, like, like]);
+      (rows || []).forEach((r) => push({
+        type: 'flyer',
+        id: String(r.flyer_id),
+        title: r.title || r.shop_name,
+        subtitle: '전단',
+        detail: r.category || r.shop_name || '',
+        url: `/r/${regionId}/flyers`,
+      }));
+    } catch (e) { /* noop */ }
+
+    // 지역뉴스
+    try {
+      const query = USE_POSTGRES
+        ? `SELECT news_id, title, content FROM region_news
+           WHERE region_id = $2 AND is_public IS NOT FALSE AND (title ILIKE $1 OR content ILIKE $1)
+           LIMIT ${limit}`
+        : `SELECT news_id, title, content FROM region_news
+           WHERE region_id = ? AND (title LIKE ? OR content LIKE ?)
+           LIMIT ${limit}`;
+      const rows = USE_POSTGRES
+        ? await db.query(query, [like, regionId])
+        : await db.query(query, [regionId, like, like]);
+      (rows || []).forEach((r) => push({
+        type: 'news',
+        id: String(r.news_id),
+        title: r.title,
+        subtitle: '지역뉴스',
+        detail: (r.content || '').slice(0, 80),
+        url: `/r/${regionId}/news`,
+      }));
+    } catch (e) { /* noop */ }
+
+    // 오디션
+    try {
+      const query = USE_POSTGRES
+        ? `SELECT audition_id, title, description FROM auditions
+           WHERE CAST(region_id AS TEXT) = $2 AND (title ILIKE $1 OR description ILIKE $1)
+           LIMIT ${limit}`
+        : `SELECT auditionId, title, description FROM auditions
+           WHERE CAST(regionId AS TEXT) = ? AND (title LIKE ? OR description LIKE ?)
+           LIMIT ${limit}`;
+      const rows = USE_POSTGRES
+        ? await db.query(query, [like, regionId])
+        : await db.query(query, [regionId, like, like]);
+      (rows || []).forEach((r) => push({
+        type: 'audition',
+        id: String(r.audition_id || r.auditionId),
+        title: r.title,
+        subtitle: '오디션',
+        detail: (r.description || '').slice(0, 80),
+        url: `/r/${regionId}/auditions`,
+      }));
+    } catch (e) { /* noop */ }
+
+    // 공유방송
+    try {
+      const query = USE_POSTGRES
+        ? `SELECT broadcast_id, title, description FROM broadcasts
+           WHERE CAST(region_id AS TEXT) = $2 AND (title ILIKE $1 OR description ILIKE $1)
+           LIMIT ${limit}`
+        : `SELECT broadcastId, title, description FROM broadcasts
+           WHERE CAST(regionId AS TEXT) = ? AND (title LIKE ? OR description LIKE ?)
+           LIMIT ${limit}`;
+      const rows = USE_POSTGRES
+        ? await db.query(query, [like, regionId])
+        : await db.query(query, [regionId, like, like]);
+      (rows || []).forEach((r) => push({
+        type: 'broadcast',
+        id: String(r.broadcast_id || r.broadcastId),
+        title: r.title,
+        subtitle: '공유방송',
+        detail: (r.description || '').slice(0, 80),
+        url: `/broadcast/${r.broadcast_id || r.broadcastId}`,
+      }));
+    } catch (e) { /* noop */ }
+
+    // 지역 소개
+    try {
+      const query = USE_POSTGRES
+        ? `SELECT region_id, content, sections::text AS sections_text FROM region_info
+           WHERE region_id = $2 AND (content ILIKE $1 OR sections::text ILIKE $1)
+           LIMIT 3`
+        : `SELECT region_id, content, sections FROM region_info
+           WHERE region_id = ? AND (content LIKE ? OR sections LIKE ?)
+           LIMIT 3`;
+      const rows = USE_POSTGRES
+        ? await db.query(query, [like, regionId])
+        : await db.query(query, [regionId, like, like]);
+      (rows || []).forEach((r) => push({
+        type: 'intro',
+        id: String(r.region_id),
+        title: '지역 소개',
+        subtitle: '지역소개',
+        detail: (r.content || '').slice(0, 80),
+        url: `/r/${regionId}/intro`,
+      }));
+    } catch (e) { /* noop */ }
+
+    // 아파트
+    try {
+      const query = USE_POSTGRES
+        ? `SELECT apartment_id, name, address FROM apartments
+           WHERE CAST(region_id AS TEXT) = $2 AND (name ILIKE $1 OR address ILIKE $1)
+           LIMIT ${limit}`
+        : `SELECT apartment_id, name, address FROM apartments
+           WHERE CAST(region_id AS TEXT) = ? AND (name LIKE ? OR address LIKE ?)
+           LIMIT ${limit}`;
+      const rows = USE_POSTGRES
+        ? await db.query(query, [like, regionId])
+        : await db.query(query, [regionId, like, like]);
+      (rows || []).forEach((r) => push({
+        type: 'apartment',
+        id: String(r.apartment_id),
+        title: r.name,
+        subtitle: '아파트',
+        detail: r.address || '',
+        url: `/r/${regionId}/apt`,
+      }));
+    } catch (e) { /* noop */ }
+
+    return res.json({ results, query: q, regionId });
+  } catch (err) {
+    logger.error('Error in /api/regions/:regionId/search:', err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
@@ -12638,7 +13214,7 @@ app.post('/api/upload/region-image', requireAuth, regionImageUpload.single('imag
 // GET /api/banners - List banners with filters
 app.get('/api/banners', async (req, res) => {
   try {
-    const { regionId, activeOnly } = req.query;
+    const { regionId, activeOnly, type } = req.query;
 
     const parseBannerRegions = (raw) => {
       if (Array.isArray(raw)) return raw.map((v) => String(v || '').trim()).filter(Boolean);
@@ -12683,10 +13259,22 @@ app.get('/api/banners', async (req, res) => {
     // Client-side filtering for regions and dates
     const now = new Date();
     rows = rows.filter(banner => {
+      const bannerType = String((USE_POSTGRES ? banner.type : banner.type) || 'main').toLowerCase();
+      if (type) {
+        if (bannerType !== String(type).toLowerCase()) return false;
+      }
+
       // Region filter
       if (regionId) {
+        const rid = String(regionId);
         const regions = parseBannerRegions(banner.regions);
-        if (regions.length > 0 && !regions.includes(String(regionId))) {
+        const regionIdCol = String((USE_POSTGRES ? banner.region_id : banner.regionId) || '').trim();
+        if (bannerType === 'region_portal') {
+          if (regionIdCol && regionIdCol === rid) return true;
+          if (regions.includes(rid)) return true;
+          return false;
+        }
+        if (regions.length > 0 && !regions.includes(rid)) {
           return false;
         }
       }
@@ -12733,6 +13321,8 @@ app.get('/api/banners', async (req, res) => {
           gradientStop1: b.gradient_stop1 ?? 0,
           gradientStop2: b.gradient_stop2 ?? 100,
           chipLabel: b.chip_label || null,
+          type: b.type || 'main',
+          regionId: b.region_id || null,
           createdAt: b.created_at,
           updatedAt: b.updated_at
         };
@@ -12758,6 +13348,8 @@ app.get('/api/banners', async (req, res) => {
           gradientStop1: b.gradientStop1 ?? 0,
           gradientStop2: b.gradientStop2 ?? 100,
           chipLabel: b.chipLabel || null,
+          type: b.type || 'main',
+          regionId: b.regionId || null,
           createdAt: b.createdAt,
           updatedAt: b.updatedAt
         };
@@ -12780,6 +13372,8 @@ app.post('/api/banners', async (req, res) => {
     const bannerId = b.id || b.bannerId || `BANNER_${Date.now()}_${Math.floor(Math.random()*10000)}`;
     const now = new Date().toISOString();
     const regions = Array.isArray(b.regions) ? JSON.stringify(b.regions) : '[]';
+    const bannerType = String(b.type || 'main').trim() || 'main';
+    const regionIdToStore = b.regionId || b.region_id || (Array.isArray(b.regions) && b.regions[0] ? String(b.regions[0]) : null);
 
     // Check existence first
     const selectQuery = USE_POSTGRES ? 'SELECT banner_id FROM banners WHERE banner_id = $1' : 'SELECT bannerId FROM banners WHERE bannerId = ?';
@@ -12795,8 +13389,8 @@ app.post('/api/banners', async (req, res) => {
 
     if (USE_POSTGRES) {
       const query = `
-        INSERT INTO banners(banner_id, title, description, image_url, video_url, alt, link_url, regions, start_date, end_date, is_active, priority, weight, gradient_enabled, gradient_preset, gradient_color1, gradient_color2, gradient_stop1, gradient_stop2, chip_label, created_at, updated_at)
-        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22)
+        INSERT INTO banners(banner_id, title, description, image_url, video_url, alt, link_url, regions, start_date, end_date, is_active, priority, weight, gradient_enabled, gradient_preset, gradient_color1, gradient_color2, gradient_stop1, gradient_stop2, chip_label, type, region_id, created_at, updated_at)
+        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24)
       `;
       await db.query(query, [
         bannerId,
@@ -12819,13 +13413,15 @@ app.post('/api/banners', async (req, res) => {
         b.gradientStop1 ?? 0,
         b.gradientStop2 ?? 100,
         b.chipLabel || null,
+        bannerType,
+        regionIdToStore,
         now,
         now
       ]);
     } else {
       const query = `
-        INSERT INTO banners(bannerId, title, description, imageUrl, videoUrl, alt, linkUrl, regions, startDate, endDate, isActive, priority, weight, gradientEnabled, gradientPreset, gradientColor1, gradientColor2, gradientStop1, gradientStop2, chipLabel, createdAt, updatedAt)
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO banners(bannerId, title, description, imageUrl, videoUrl, alt, linkUrl, regions, startDate, endDate, isActive, priority, weight, gradientEnabled, gradientPreset, gradientColor1, gradientColor2, gradientStop1, gradientStop2, chipLabel, type, regionId, createdAt, updatedAt)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `;
       await db.run(query, [
         bannerId,
@@ -12848,6 +13444,8 @@ app.post('/api/banners', async (req, res) => {
         b.gradientStop1 ?? 0,
         b.gradientStop2 ?? 100,
         b.chipLabel || null,
+        bannerType,
+        regionIdToStore,
         now,
         now
       ]);
@@ -12891,7 +13489,9 @@ app.patch('/api/banners/:id', async (req, res) => {
       gradientColor2: USE_POSTGRES ? 'gradient_color2' : 'gradientColor2',
       gradientStop1: USE_POSTGRES ? 'gradient_stop1' : 'gradientStop1',
       gradientStop2: USE_POSTGRES ? 'gradient_stop2' : 'gradientStop2',
-      chipLabel: USE_POSTGRES ? 'chip_label' : 'chipLabel'
+      chipLabel: USE_POSTGRES ? 'chip_label' : 'chipLabel',
+      type: 'type',
+      regionId: USE_POSTGRES ? 'region_id' : 'regionId',
     };
 
     for (const key of Object.keys(updates)) {
@@ -13937,19 +14537,17 @@ app.delete('/api/supplies/:id', async (req, res) => {
 
 // ===================== POINTS API =====================
 // GET /api/points/:memberId/balance - Get member's current point balance
-app.get('/api/points/:memberId/balance', async (req, res) => {
+app.get('/api/points/:memberId/balance', requireAuth, async (req, res) => {
   try {
     const { memberId } = req.params;
     if (!memberId) return jsonFail(res, 400, 'memberId required');
+    if (!canViewMemberPoints({ memberId: req.authMemberId, role: req.authRole }, memberId)) {
+      return jsonFail(res, 403, 'Forbidden');
+    }
     
-    const query = USE_POSTGRES
-      ? "SELECT COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 0 ELSE amount END), 0) as balance FROM point_ledger WHERE member_id = $1"
-      : "SELECT COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 0 ELSE amount END), 0) as balance FROM point_ledger WHERE memberId = ?";
-    
-    const rows = await db.query(query, [memberId]);
-    const balance = rows[0]?.balance || 0;
+    const balance = await getMemberPointBalance(memberId);
 
-    return jsonOk(res, { memberId, balance: Number(balance) });
+    return jsonOk(res, { memberId, balance });
   } catch (err) {
     logger.error('Error fetching point balance:', err);
     return jsonFail(res, 500, err.message);
@@ -13993,10 +14591,13 @@ async function enrichMissionTitles(transactions) {
 }
 
 // GET /api/points/:memberId/history - Get point transaction history
-app.get('/api/points/:memberId/history', async (req, res) => {
+app.get('/api/points/:memberId/history', requireAuth, async (req, res) => {
   try {
     const { memberId } = req.params;
     if (!memberId) return jsonFail(res, 400, 'memberId required');
+    if (!canViewMemberPoints({ memberId: req.authMemberId, role: req.authRole }, memberId)) {
+      return jsonFail(res, 403, 'Forbidden');
+    }
     
     // ★ 관리자용 전체 조회: memberId가 'all'일 때
     if (memberId === 'all') {
@@ -14149,6 +14750,14 @@ app.post('/api/points/admin/grant', requireAuth, async (req, res) => {
     if (!memberId || amount === undefined) {
       return jsonFail(res, 400, 'memberId and amount required');
     }
+
+    const numericAmount = Number(amount);
+    if (numericAmount < 0) {
+      const currentBalance = await getMemberPointBalance(memberId);
+      if (currentBalance + numericAmount < 0) {
+        return jsonFail(res, 400, '포인트 잔액이 부족합니다.');
+      }
+    }
     
     const now = new Date().toISOString();
     await syncPointLedgerSeq(); // 지급 직전 시퀀스 보정
@@ -14157,17 +14766,17 @@ app.post('/api/points/admin/grant', requireAuth, async (req, res) => {
       await db.run(
         `INSERT INTO point_ledger(member_id, amount, type, description, reference_id, reference_type, admin_id, status, created_at)
          VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [memberId, Number(amount), type || 'ADMIN', description || '', referenceId || null, referenceType || null, null, 'active', now]
+        [memberId, numericAmount, type || 'ADMIN', description || '', referenceId || null, referenceType || null, null, 'active', now]
       );
     } else {
       await db.run(
         `INSERT INTO point_ledger(memberId, amount, type, description, referenceId, referenceType, admin_id, status, createdAt)
          VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [memberId, Number(amount), type || 'ADMIN', description || '', referenceId || null, referenceType || null, null, 'active', now]
+        [memberId, numericAmount, type || 'ADMIN', description || '', referenceId || null, referenceType || null, null, 'active', now]
       );
     }
 
-    return jsonOk(res, { memberId, amount: Number(amount) });
+    return jsonOk(res, { memberId, amount: numericAmount });
   } catch (err) {
     logger.error('Error granting points:', err);
     return jsonFail(res, 500, err.message);
@@ -14184,42 +14793,57 @@ app.post('/api/points/pay', requireAuth, async (req, res) => {
     if (!memberId || !storeId || !amount || amount <= 0) {
       return jsonFail(res, 400, 'storeId and positive amount required');
     }
-    
-    // Check current balance
-    const balanceQuery = USE_POSTGRES
-      ? "SELECT COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 0 ELSE amount END), 0) as balance FROM point_ledger WHERE member_id = $1"
-      : "SELECT COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 0 ELSE amount END), 0) as balance FROM point_ledger WHERE memberId = ?";
-    
-    const balanceRow = await db.get(balanceQuery, [memberId]);
-    const currentBalance = Number(balanceRow?.balance || 0);
-    
-    if (currentBalance < amount) {
-      return jsonFail(res, 400, '포인트 잔액이 부족합니다.');
-    }
-    
+
+    const debitAmount = Math.abs(Number(amount));
     const now = new Date().toISOString();
     const description = `상점 ${storeId} 결제`;
     const referenceId = String(clientNonce || storeId || '').trim();
     const referenceType = referenceId.startsWith('DIST_ORDER_') ? 'DISTRIBUTION_ORDER' : 'STORE';
-    
-    // Deduct points (negative amount)
-    await syncPointLedgerSeq(); // 결제 직전 시퀀스 보정
+
+    await syncPointLedgerSeq();
+
+    let currentBalance = 0;
     if (USE_POSTGRES) {
-      await db.run(
-        `INSERT INTO point_ledger(member_id, amount, type, description, reference_id, reference_type, status, created_at)
-         VALUES($1, $2, $3, $4, $5, $6, $7, $8)`,
-        [memberId, -Math.abs(Number(amount)), 'PAYMENT', description, referenceId, referenceType, 'active', now]
-      );
+      await db.run('BEGIN');
+      try {
+        await lockMemberPointLedger(memberId);
+        currentBalance = await getMemberPointBalance(memberId);
+        if (currentBalance < debitAmount) {
+          await db.run('ROLLBACK');
+          return jsonFail(res, 400, '포인트 잔액이 부족합니다.');
+        }
+        await db.run(
+          `INSERT INTO point_ledger(member_id, amount, type, description, reference_id, reference_type, status, created_at)
+           VALUES($1, $2, $3, $4, $5, $6, $7, $8)`,
+          [memberId, -debitAmount, 'PAYMENT', description, referenceId, referenceType, 'active', now]
+        );
+        await db.run('COMMIT');
+      } catch (error) {
+        await db.run('ROLLBACK');
+        throw error;
+      }
     } else {
-      await db.run(
-        `INSERT INTO point_ledger(memberId, amount, type, description, referenceId, referenceType, status, createdAt)
-         VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
-        [memberId, -Math.abs(Number(amount)), 'PAYMENT', description, referenceId, referenceType, 'active', now]
-      );
+      await db.run('BEGIN');
+      try {
+        currentBalance = await getMemberPointBalance(memberId);
+        if (currentBalance < debitAmount) {
+          await db.run('ROLLBACK');
+          return jsonFail(res, 400, '포인트 잔액이 부족합니다.');
+        }
+        await db.run(
+          `INSERT INTO point_ledger(memberId, amount, type, description, referenceId, referenceType, status, createdAt)
+           VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+          [memberId, -debitAmount, 'PAYMENT', description, referenceId, referenceType, 'active', now]
+        );
+        await db.run('COMMIT');
+      } catch (error) {
+        await db.run('ROLLBACK');
+        throw error;
+      }
     }
     
-    logger.info(`Payment processed: memberId=${memberId}, storeId=${storeId}, amount=${amount}`);
-    return jsonOk(res, { memberId, storeId, amount: Number(amount), balance: currentBalance - Number(amount), clientNonce: clientNonce || null });
+    logger.info(`Payment processed: memberId=${memberId}, storeId=${storeId}, amount=${debitAmount}`);
+    return jsonOk(res, { memberId, storeId, amount: debitAmount, balance: currentBalance - debitAmount, clientNonce: clientNonce || null });
   } catch (err) {
     logger.error('Error processing payment:', err);
     return jsonFail(res, 500, err.message);
@@ -14256,7 +14880,7 @@ app.post('/api/points/transfer', requireAuth, async (req, res) => {
       ? await db.get('SELECT config_value FROM configs WHERE config_key = $1', ['points_transfer_enabled'])
       : await db.get('SELECT configValue FROM configs WHERE configKey = ?', ['points_transfer_enabled']);
     const transferEnabledValue = USE_POSTGRES ? transferEnabledRow?.config_value : transferEnabledRow?.configValue;
-    if (String(transferEnabledValue ?? 'true').toLowerCase() === 'false') {
+    if (!isPointsTransferEnabledValue(transferEnabledValue)) {
       return jsonFail(res, 403, '현재 포인트 전송이 중지되어 있습니다.');
     }
 
@@ -14274,15 +14898,6 @@ app.post('/api/points/transfer', requireAuth, async (req, res) => {
       return jsonFail(res, 404, '받는 회원을 찾을 수 없습니다.');
     }
 
-    const senderBalanceQuery = USE_POSTGRES
-      ? "SELECT COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 0 ELSE amount END), 0) as balance FROM point_ledger WHERE member_id = $1"
-      : "SELECT COALESCE(SUM(CASE WHEN status = 'cancelled' THEN 0 ELSE amount END), 0) as balance FROM point_ledger WHERE memberId = ?";
-    const senderBalanceRow = await db.get(senderBalanceQuery, [senderId]);
-    const senderBalance = Number(senderBalanceRow?.balance || 0);
-    if (senderBalance < transferAmount) {
-      return jsonFail(res, 400, '포인트 잔액이 부족합니다.');
-    }
-
     const senderName = String(senderMember?.name || senderId).trim();
     const receiverName = String(receiverMember?.name || toMemberName || receiverId).trim();
     const now = new Date().toISOString();
@@ -14290,10 +14905,17 @@ app.post('/api/points/transfer', requireAuth, async (req, res) => {
     const senderDescription = String(description || `포인트 전송 (→ ${receiverName})`).trim();
     const receiverDescription = `포인트 수신 (← ${senderName})`;
 
-    await syncPointLedgerSeq(); // 전송 직전 시퀀스 보정
+    await syncPointLedgerSeq();
+    let senderBalance = 0;
     if (USE_POSTGRES) {
       await db.run('BEGIN');
       try {
+        await lockMemberPointLedger(senderId);
+        senderBalance = await getMemberPointBalance(senderId);
+        if (senderBalance < transferAmount) {
+          await db.run('ROLLBACK');
+          return jsonFail(res, 400, '포인트 잔액이 부족합니다.');
+        }
         await db.run(
           `INSERT INTO point_ledger(member_id, amount, type, description, reference_id, reference_type, user_name, status, created_at)
            VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
@@ -14312,6 +14934,11 @@ app.post('/api/points/transfer', requireAuth, async (req, res) => {
     } else {
       await db.run('BEGIN');
       try {
+        senderBalance = await getMemberPointBalance(senderId);
+        if (senderBalance < transferAmount) {
+          await db.run('ROLLBACK');
+          return jsonFail(res, 400, '포인트 잔액이 부족합니다.');
+        }
         await db.run(
           `INSERT INTO point_ledger(memberId, amount, type, description, referenceId, referenceType, user_name, status, createdAt)
            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -17143,27 +17770,9 @@ app.post('/api/supply-requests', async (req, res) => {
       return res.status(400).json({ error: 'invalid supplyId', details: { supplyId: supplyIdRaw } });
     }
 
-    // ★ 신청예정 차단: supplies 테이블에서 status 확인
+    // ★ 신청예정/품절/재고: supplies 테이블에서 status·quantity 확인 (파싱 후 검증)
     let supplyTitle = null;
     let managerName = null;
-    try {
-      const supplyRow = USE_POSTGRES
-        ? await db.get('SELECT status, title, created_by FROM supplies WHERE supply_id = $1', [supplyItemId])
-        : await db.get('SELECT status, title, createdBy FROM supplies WHERE supplyId = ?', [supplyItemId]);
-      if (supplyRow && supplyRow.status === 'scheduled') {
-        return res.status(403).json({ error: '신청예정 상태입니다. 아직 신청을 받지 않습니다.' });
-      }
-      if (supplyRow) {
-        supplyTitle = supplyRow.title || null;
-        const managerId = supplyRow.created_by || supplyRow.createdBy;
-        if (managerId) {
-          const managerRow = USE_POSTGRES
-            ? await db.get('SELECT name FROM members WHERE member_id = $1', [managerId])
-            : await db.get('SELECT name FROM members WHERE memberId = ?', [managerId]);
-          managerName = managerRow?.name || String(managerId);
-        }
-      }
-    } catch (_) { /* 조회 실패 시 차단하지 않고 통과 */ }
     const requesterId = (requesterIdRaw === null || requesterIdRaw === undefined) ? '' : String(requesterIdRaw).trim();
     if (!requesterId) {
       return res.status(400).json({ error: 'requesterId required' });
@@ -17176,6 +17785,37 @@ app.post('/api/supply-requests', async (req, res) => {
     const requesterContact = requesterContactRaw ? String(requesterContactRaw).trim() : null;
     const message = messageRaw ? String(messageRaw).trim() : null;
     const requestType = String(requestTypeRaw || 'supply').trim().toLowerCase() === 'distribution' ? 'distribution' : 'supply';
+
+    try {
+      const supplyRow = USE_POSTGRES
+        ? await db.get('SELECT status, title, quantity, created_by FROM supplies WHERE supply_id = $1', [supplyItemId])
+        : await db.get('SELECT status, title, quantity, createdBy FROM supplies WHERE supplyId = ?', [supplyItemId]);
+      if (!supplyRow) {
+        return res.status(404).json({ error: '상품을 찾을 수 없습니다.' });
+      }
+      const supplyStatus = String(supplyRow.status || '').toLowerCase();
+      if (supplyStatus === 'scheduled') {
+        return res.status(403).json({ error: '신청예정 상태입니다. 아직 신청을 받지 않습니다.' });
+      }
+      if (['soldout', 'hidden', 'deleted'].includes(supplyStatus)) {
+        return res.status(403).json({ error: '품절 또는 판매 중지된 상품입니다.' });
+      }
+      const stockQty = Math.max(0, Math.trunc(Number(supplyRow.quantity ?? 0)));
+      if (stockQty <= 0) {
+        return res.status(403).json({ error: '재고가 없는 상품입니다.' });
+      }
+      if (requestType === 'distribution' && quantity > stockQty) {
+        return res.status(400).json({ error: `재고(${stockQty}개)보다 많은 수량을 주문할 수 없습니다.` });
+      }
+      supplyTitle = supplyRow.title || null;
+      const managerId = supplyRow.created_by || supplyRow.createdBy;
+      if (managerId) {
+        const managerRow = USE_POSTGRES
+          ? await db.get('SELECT name FROM members WHERE member_id = $1', [managerId])
+          : await db.get('SELECT name FROM members WHERE memberId = ?', [managerId]);
+        managerName = managerRow?.name || String(managerId);
+      }
+    } catch (_) { /* 조회 실패 시 차단하지 않고 통과 */ }
     const receiveMethod = receiveMethodRaw ? String(receiveMethodRaw).trim().toLowerCase() : null;
     const paymentReferenceId = paymentReferenceIdRaw ? String(paymentReferenceIdRaw).trim() : null;
     const paymentAmount = Math.max(0, Math.trunc(Number(paymentAmountRaw || 0)));
@@ -17461,6 +18101,196 @@ app.get('/api/my/supply-requests/managed', async (req, res) => {
 // Distribution Wallet API
 // ============================================================
 
+async function getDistWalletSummary(sellerId) {
+  const sid = String(sellerId || '').trim();
+  const empty = {
+    totalEarned: 0,
+    totalPending: 0,
+    totalPaidOut: 0,
+    totalWithdrawn: 0,
+    eraWithdrawn: 0,
+    available: 0,
+    overpaidLegacy: false,
+    withdrawals: [],
+  };
+  if (!sid) return empty;
+
+  // payment_amount=0 인 구 유통 주문 복구 (판매자별)
+  try {
+    if (USE_POSTGRES) {
+      await db.run(`
+        UPDATE supply_requests sr
+        SET payment_amount = COALESCE(sr.quantity, 1) * COALESCE(s.price, 0)
+        FROM supplies s
+        WHERE sr.supply_item_id::text = s.supply_id::text
+          AND COALESCE(sr.request_type, 'supply') = 'distribution'
+          AND COALESCE(sr.payment_amount, 0) = 0
+          AND COALESCE(s.price, 0) > 0
+          AND (
+            s.created_by::text = $1
+            OR COALESCE(s.assigned_to::text, '') = $1
+            OR COALESCE(s.upload_meta::jsonb->>'sellerId', '') = $1
+          )
+      `, [sid]);
+    } else {
+      await db.run(`
+        UPDATE supply_requests
+        SET paymentAmount = COALESCE(quantity, 1) * COALESCE(
+          (SELECT price FROM supplies s WHERE s.supplyId = supply_requests.supplyItemId LIMIT 1), 0
+        )
+        WHERE COALESCE(requestType, 'supply') = 'distribution'
+          AND COALESCE(paymentAmount, 0) = 0
+          AND supplyItemId IN (
+            SELECT supplyId FROM supplies
+            WHERE createdBy = ? OR COALESCE(assignedTo, '') = ?
+          )
+      `, [sid, sid]);
+    }
+  } catch (e) {
+    logger.warn('[dist wallet] payment_amount repair skipped:', e.message);
+  }
+
+  let totalEarned = 0;
+  if (USE_POSTGRES) {
+    const earnRow = await db.get(`
+      SELECT COALESCE(SUM(sr.payment_amount), 0) AS total
+      FROM supply_requests sr
+      INNER JOIN supplies s ON sr.supply_item_id::text = s.supply_id::text
+      WHERE COALESCE(sr.request_type, 'supply') = 'distribution'
+        AND COALESCE(sr.payment_amount, 0) > 0
+        AND UPPER(COALESCE(sr.order_status, '')) NOT IN ('CANCELLED', 'RETURNED')
+        AND (
+          s.created_by::text = $1
+          OR COALESCE(s.assigned_to::text, '') = $1
+          OR COALESCE(s.upload_meta::jsonb->>'sellerId', '') = $1
+        )
+    `, [sid]);
+    totalEarned = Number(earnRow?.total || 0);
+  } else {
+    const earnRow = await db.get(`
+      SELECT COALESCE(SUM(sr.paymentAmount), 0) AS total
+      FROM supply_requests sr
+      INNER JOIN supplies s ON sr.supplyItemId = s.supplyId
+      WHERE COALESCE(sr.requestType, 'supply') = 'distribution'
+        AND COALESCE(sr.paymentAmount, 0) > 0
+        AND UPPER(COALESCE(sr.orderStatus, '')) NOT IN ('CANCELLED', 'RETURNED')
+        AND (s.createdBy = ? OR COALESCE(s.assignedTo, '') = ?)
+    `, [sid, sid]);
+    totalEarned = Number(earnRow?.total || 0);
+  }
+
+  let totalPending = 0;
+  let totalPaidOut = 0;
+  if (USE_POSTGRES) {
+    const pendingRow = await db.get(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM dist_payout_requests WHERE seller_id::text = $1 AND status IN ('PENDING', 'APPROVED')`,
+      [sid]
+    );
+    const paidRow = await db.get(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM dist_payout_requests WHERE seller_id::text = $1 AND status = 'PAID'`,
+      [sid]
+    );
+    totalPending = Number(pendingRow?.total || 0);
+    totalPaidOut = Number(paidRow?.total || 0);
+  } else {
+    const pendingRow = await db.get(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM dist_payout_requests WHERE seller_id = ? AND status IN ('PENDING', 'APPROVED')`,
+      [sid]
+    );
+    const paidRow = await db.get(
+      `SELECT COALESCE(SUM(amount), 0) AS total FROM dist_payout_requests WHERE seller_id = ? AND status = 'PAID'`,
+      [sid]
+    );
+    totalPending = Number(pendingRow?.total || 0);
+    totalPaidOut = Number(paidRow?.total || 0);
+  }
+
+  let withdrawals = [];
+  if (USE_POSTGRES) {
+    withdrawals = await db.all(
+      `SELECT * FROM dist_payout_requests WHERE seller_id::text = $1 ORDER BY requested_at DESC LIMIT 20`,
+      [sid]
+    );
+  } else {
+    withdrawals = await db.all(
+      `SELECT * FROM dist_payout_requests WHERE seller_id = ? ORDER BY requested_at DESC LIMIT 20`,
+      [sid]
+    );
+  }
+
+  const totalWithdrawn = totalPending + totalPaidOut;
+  // 과거 과다지급(테스트/마이그레이션) 데이터: 지급완료가 누적판매의 2배 초과면 legacy 모드
+  const overpaidLegacy = totalPaidOut > totalEarned * 2;
+
+  let eraWithdrawn = totalWithdrawn;
+  if (overpaidLegacy) {
+    try {
+      let firstSaleAt = null;
+      if (USE_POSTGRES) {
+        const firstRow = await db.get(`
+          SELECT MIN(sr.created_at) AS first_at
+          FROM supply_requests sr
+          INNER JOIN supplies s ON sr.supply_item_id::text = s.supply_id::text
+          WHERE COALESCE(sr.request_type, 'supply') = 'distribution'
+            AND COALESCE(sr.payment_amount, 0) > 0
+            AND UPPER(COALESCE(sr.order_status, '')) NOT IN ('CANCELLED', 'RETURNED')
+            AND (
+              s.created_by::text = $1
+              OR COALESCE(s.assigned_to::text, '') = $1
+              OR COALESCE(s.upload_meta::jsonb->>'sellerId', '') = $1
+            )
+        `, [sid]);
+        firstSaleAt = firstRow?.first_at || null;
+        if (firstSaleAt) {
+          const eraRow = await db.get(
+            `SELECT COALESCE(SUM(amount), 0) AS total FROM dist_payout_requests
+             WHERE seller_id::text = $1 AND status IN ('PENDING', 'APPROVED', 'PAID') AND requested_at >= $2`,
+            [sid, firstSaleAt]
+          );
+          eraWithdrawn = Number(eraRow?.total || 0);
+        }
+      } else {
+        const firstRow = await db.get(`
+          SELECT MIN(sr.createdAt) AS first_at
+          FROM supply_requests sr
+          INNER JOIN supplies s ON sr.supplyItemId = s.supplyId
+          WHERE COALESCE(sr.requestType, 'supply') = 'distribution'
+            AND COALESCE(sr.paymentAmount, 0) > 0
+            AND UPPER(COALESCE(sr.orderStatus, '')) NOT IN ('CANCELLED', 'RETURNED')
+            AND (s.createdBy = ? OR COALESCE(s.assignedTo, '') = ?)
+        `, [sid, sid]);
+        firstSaleAt = firstRow?.first_at || firstRow?.firstAt || null;
+        if (firstSaleAt) {
+          const eraRow = await db.get(
+            `SELECT COALESCE(SUM(amount), 0) AS total FROM dist_payout_requests
+             WHERE seller_id = ? AND status IN ('PENDING', 'APPROVED', 'PAID') AND requested_at >= ?`,
+            [sid, firstSaleAt]
+          );
+          eraWithdrawn = Number(eraRow?.total || 0);
+        }
+      }
+    } catch (e) {
+      logger.warn('[dist wallet] era withdrawal calc skipped:', e.message);
+      eraWithdrawn = totalWithdrawn;
+    }
+  }
+
+  const available = overpaidLegacy
+    ? Math.max(0, totalEarned - eraWithdrawn)
+    : Math.max(0, totalEarned - totalPending - totalPaidOut);
+
+  return {
+    totalEarned,
+    totalPending,
+    totalPaidOut,
+    totalWithdrawn,
+    eraWithdrawn: overpaidLegacy ? eraWithdrawn : totalWithdrawn,
+    available,
+    overpaidLegacy,
+    withdrawals,
+  };
+}
+
 // GET /api/dist/wallet - 유통판매 포인트지갑 (잔액+영수증)
 app.get('/api/dist/wallet', async (req, res) => {
   try {
@@ -17473,64 +18303,8 @@ app.get('/api/dist/wallet', async (req, res) => {
     if (!session) return res.status(401).json({ error: 'Invalid session' });
     const sellerId = USE_POSTGRES ? session.member_id : session.memberId;
 
-    // 누적 판매 대금: 결제 즉시 적립, 취소/반품 완료 시 차감
-    let totalEarned = 0;
-    if (USE_POSTGRES) {
-      const earnRow = await db.get(`
-        SELECT COALESCE(SUM(sr.payment_amount),0) AS total
-        FROM supply_requests sr
-        JOIN supplies s ON sr.supply_item_id = s.supply_id
-        WHERE s.created_by = $1
-          AND COALESCE(sr.request_type,'supply') = 'distribution'
-          AND COALESCE(sr.payment_amount, 0) > 0
-          AND UPPER(COALESCE(sr.order_status,'')) NOT IN ('CANCELLED', 'RETURNED')
-      `, [sellerId]);
-      totalEarned = Number(earnRow?.total || 0);
-    } else {
-      const earnRow = await db.get(`
-        SELECT COALESCE(SUM(sr.paymentAmount),0) AS total
-        FROM supply_requests sr
-        JOIN supplies s ON sr.supplyItemId = s.supplyId
-        WHERE s.createdBy = ?
-          AND COALESCE(sr.requestType,'supply') = 'distribution'
-          AND COALESCE(sr.paymentAmount, 0) > 0
-          AND UPPER(COALESCE(sr.orderStatus,'')) NOT IN ('CANCELLED', 'RETURNED')
-      `, [sellerId]);
-      totalEarned = Number(earnRow?.total || 0);
-    }
-
-    // 출금요청 합계: PENDING+APPROVED+PAID 상태
-    let totalWithdrawn = 0;
-    if (USE_POSTGRES) {
-      const wdRow = await db.get(
-        `SELECT COALESCE(SUM(amount),0) AS total FROM dist_payout_requests WHERE seller_id=$1 AND status IN ('PENDING','APPROVED','PAID')`,
-        [sellerId]
-      );
-      totalWithdrawn = Number(wdRow?.total || 0);
-    } else {
-      const wdRow = await db.get(
-        `SELECT COALESCE(SUM(amount),0) AS total FROM dist_payout_requests WHERE seller_id=? AND status IN ('PENDING','APPROVED','PAID')`,
-        [sellerId]
-      );
-      totalWithdrawn = Number(wdRow?.total || 0);
-    }
-
-    // 출금 이력
-    let withdrawals = [];
-    if (USE_POSTGRES) {
-      withdrawals = await db.all(
-        `SELECT * FROM dist_payout_requests WHERE seller_id=$1 ORDER BY requested_at DESC LIMIT 20`,
-        [sellerId]
-      );
-    } else {
-      withdrawals = await db.all(
-        `SELECT * FROM dist_payout_requests WHERE seller_id=? ORDER BY requested_at DESC LIMIT 20`,
-        [sellerId]
-      );
-    }
-
-    const available = totalEarned - totalWithdrawn;
-    res.json({ ok: true, totalEarned, totalWithdrawn, available, withdrawals });
+    const summary = await getDistWalletSummary(sellerId);
+    res.json({ ok: true, ...summary });
   } catch (err) {
     logger.error('Error fetching dist wallet:', err);
     res.status(500).json({ error: err.message });
@@ -17554,42 +18328,8 @@ app.post('/api/dist/wallet/withdraw', async (req, res) => {
     const { bankName, accountNumber, depositorName, memo } = req.body || {};
     if (!bankName || !accountNumber || !depositorName) return res.status(400).json({ error: '은행명, 계좌번호, 예금주명을 입력하세요.' });
 
-    // 가용 잔액 재확인: 결제 즉시 적립, 취소/반품 완료 시 차감
-    let totalEarned = 0, totalWithdrawn = 0;
-    if (USE_POSTGRES) {
-      const earnRow = await db.get(`
-        SELECT COALESCE(SUM(sr.payment_amount),0) AS total
-        FROM supply_requests sr
-        JOIN supplies s ON sr.supply_item_id = s.supply_id
-        WHERE s.created_by = $1
-          AND COALESCE(sr.request_type,'supply') = 'distribution'
-          AND COALESCE(sr.payment_amount, 0) > 0
-          AND UPPER(COALESCE(sr.order_status,'')) NOT IN ('CANCELLED', 'RETURNED')
-      `, [sellerId]);
-      totalEarned = Number(earnRow?.total || 0);
-      const wdRow = await db.get(
-        `SELECT COALESCE(SUM(amount),0) AS total FROM dist_payout_requests WHERE seller_id=$1 AND status IN ('PENDING','APPROVED','PAID')`,
-        [sellerId]
-      );
-      totalWithdrawn = Number(wdRow?.total || 0);
-    } else {
-      const earnRow = await db.get(`
-        SELECT COALESCE(SUM(sr.paymentAmount),0) AS total
-        FROM supply_requests sr
-        JOIN supplies s ON sr.supplyItemId = s.supplyId
-        WHERE s.createdBy = ?
-          AND COALESCE(sr.requestType,'supply') = 'distribution'
-          AND COALESCE(sr.paymentAmount, 0) > 0
-          AND UPPER(COALESCE(sr.orderStatus,'')) NOT IN ('CANCELLED', 'RETURNED')
-      `, [sellerId]);
-      totalEarned = Number(earnRow?.total || 0);
-      const wdRow = await db.get(
-        `SELECT COALESCE(SUM(amount),0) AS total FROM dist_payout_requests WHERE seller_id=? AND status IN ('PENDING','APPROVED','PAID')`,
-        [sellerId]
-      );
-      totalWithdrawn = Number(wdRow?.total || 0);
-    }
-    const available = totalEarned - totalWithdrawn;
+    const summary = await getDistWalletSummary(sellerId);
+    const available = summary.available;
     if (amount > available) return res.status(400).json({ error: `출금 가능 잔액(${available}P)을 초과할 수 없습니다.` });
 
     // 판매자 이름 조회
@@ -18390,14 +19130,18 @@ app.delete('/api/notices/:id', async (req, res) => {
 // ========== 포인트 취소 API ==========
 async function handleCancelPointTransaction(req, res, transactionIdOverride = null) {
   try {
-    const { transactionId: bodyTransactionId, adminId, reason } = req.body || {};
+    if (!isAdminRole(req.authRole)) {
+      return jsonFail(res, 403, 'Forbidden: 관리자만 거래를 취소할 수 있습니다.');
+    }
+
+    const { transactionId: bodyTransactionId, reason } = req.body || {};
     const transactionId = transactionIdOverride || bodyTransactionId;
+    const adminId = req.authMemberId || null;
     
     if (!transactionId) {
       return jsonFail(res, 400, 'transactionId required');
     }
     
-    // 거래 조회
     const transactionQuery = USE_POSTGRES
       ? 'SELECT * FROM point_ledger WHERE ledger_id = $1 LIMIT 1'
       : 'SELECT * FROM point_ledger WHERE ledgerId = ? LIMIT 1';
@@ -18408,31 +19152,89 @@ async function handleCancelPointTransaction(req, res, transactionIdOverride = nu
       return jsonFail(res, 404, 'Transaction not found');
     }
     
-    // 이미 취소된 거래인지 확인
-    const existingStatus = USE_POSTGRES ? transaction.status : transaction.status;
+    const existingStatus = transaction.status;
     if (existingStatus === 'cancelled') {
       return jsonFail(res, 409, 'Transaction already cancelled');
     }
-    
-    // 취소 상태로 업데이트 + 감사용 0원 취소 레코드 추가(잔액 영향 없음)
+
+    const refType = USE_POSTGRES ? transaction.reference_type : transaction.referenceType;
+    const refId = USE_POSTGRES ? transaction.reference_id : transaction.referenceId;
     const now = new Date().toISOString();
-    const cancelDescription = `거래 취소: ${USE_POSTGRES ? (transaction.description || '') : (transaction.description || '')}${reason ? ' (' + reason + ')' : ''}`;
+    const reasonSuffix = reason ? ` (${reason})` : '';
+
+    if (refType === 'POINT_TRANSFER' && refId) {
+      const siblings = USE_POSTGRES
+        ? await db.query(
+            `SELECT ledger_id, member_id, description, status FROM point_ledger
+             WHERE reference_id = $1 AND reference_type = 'POINT_TRANSFER' AND status != 'cancelled'`,
+            [refId]
+          )
+        : await db.query(
+            `SELECT ledgerId as ledger_id, memberId as member_id, description, status FROM point_ledger
+             WHERE referenceId = ? AND referenceType = 'POINT_TRANSFER' AND status != 'cancelled'`,
+            [refId]
+          );
+
+      if (!siblings || siblings.length === 0) {
+        return jsonFail(res, 404, 'Transfer transactions not found');
+      }
+
+      if (USE_POSTGRES) {
+        await db.run('BEGIN');
+        try {
+          for (const row of siblings) {
+            const cancelDescription = `거래 취소: ${row.description || ''}${reasonSuffix}`;
+            await db.run(`UPDATE point_ledger SET status = 'cancelled' WHERE ledger_id = $1`, [row.ledger_id]);
+            await db.run(
+              `INSERT INTO point_ledger(member_id, amount, type, description, reference_id, reference_type, admin_id, status, created_at)
+               VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+              [row.member_id, 0, 'CANCEL', cancelDescription, String(row.ledger_id), 'CANCEL', adminId, 'active', now]
+            );
+          }
+          await db.run('COMMIT');
+        } catch (error) {
+          await db.run('ROLLBACK');
+          throw error;
+        }
+      } else {
+        await db.run('BEGIN');
+        try {
+          for (const row of siblings) {
+            const cancelDescription = `거래 취소: ${row.description || ''}${reasonSuffix}`;
+            await db.run(`UPDATE point_ledger SET status = 'cancelled' WHERE ledgerId = ?`, [row.ledger_id]);
+            await db.run(
+              `INSERT INTO point_ledger(memberId, amount, type, description, referenceId, referenceType, admin_id, status, createdAt)
+               VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              [row.member_id, 0, 'CANCEL', cancelDescription, String(row.ledger_id), 'CANCEL', adminId, 'active', now]
+            );
+          }
+          await db.run('COMMIT');
+        } catch (error) {
+          await db.run('ROLLBACK');
+          throw error;
+        }
+      }
+
+      logger.info(`Point transfer cancelled: transferId=${refId}, adminId=${adminId}`);
+      return jsonOk(res, { transactionId: String(transactionId), transferId: refId });
+    }
+
+    const cancelDescription = `거래 취소: ${transaction.description || ''}${reasonSuffix}`;
+    const memberId = USE_POSTGRES ? transaction.member_id : transaction.memberId;
 
     if (USE_POSTGRES) {
       await db.run('UPDATE point_ledger SET status = $1 WHERE ledger_id = $2', ['cancelled', transactionId]);
-      const memberId = transaction.member_id;
       await db.run(
         `INSERT INTO point_ledger(member_id, amount, type, description, reference_id, reference_type, admin_id, status, created_at)
          VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-        [memberId, 0, 'CANCEL', cancelDescription, String(transactionId), 'CANCEL', adminId || null, 'active', now]
+        [memberId, 0, 'CANCEL', cancelDescription, String(transactionId), 'CANCEL', adminId, 'active', now]
       );
     } else {
       await db.run('UPDATE point_ledger SET status = ? WHERE ledgerId = ?', ['cancelled', transactionId]);
-      const memberId = transaction.memberId;
       await db.run(
         `INSERT INTO point_ledger(memberId, amount, type, description, referenceId, referenceType, admin_id, status, createdAt)
          VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [memberId, 0, 'CANCEL', cancelDescription, String(transactionId), 'CANCEL', adminId || null, 'active', now]
+        [memberId, 0, 'CANCEL', cancelDescription, String(transactionId), 'CANCEL', adminId, 'active', now]
       );
     }
     
@@ -18445,12 +19247,12 @@ async function handleCancelPointTransaction(req, res, transactionIdOverride = nu
 }
 
 // POST /api/points/cancel - 포인트 거래 취소 (legacy)
-app.post('/api/points/cancel', async (req, res) => {
+app.post('/api/points/cancel', requireAuth, async (req, res) => {
   return handleCancelPointTransaction(req, res, null);
 });
 
 // POST /api/points/admin/cancel/:transactionId - AdminPoints용 별칭
-app.post('/api/points/admin/cancel/:transactionId', async (req, res) => {
+app.post('/api/points/admin/cancel/:transactionId', requireAuth, async (req, res) => {
   const { transactionId } = req.params;
   return handleCancelPointTransaction(req, res, transactionId);
 });

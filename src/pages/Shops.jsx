@@ -1047,7 +1047,7 @@ export default function Shops() {
           </div>
         )}
 
-        <div style={{ display: "grid", gap: 10, marginTop: 10 }}>
+        <div style={{ display: "grid", gap: 10, marginTop: 10, width: '100%', minWidth: 0, overflow: 'hidden' }}>
           {(() => {
             return filtered.map((s, idx) => {
               const isApproved = s.status === "approved";
@@ -1104,7 +1104,7 @@ export default function Shops() {
             const cardClass = isVip ? 'su-shop-card--vip' : 'su-shop-card--regular';
 
             return (
-              <div key={s.shopId || s.id || s.storeId || `shop-${idx}`} style={{ position: 'relative' }}>
+              <div key={s.shopId || s.id || s.storeId || `shop-${idx}`} style={{ position: 'relative', width: '100%', minWidth: 0 }}>
               {/* ── 상점 카드: 좌(썸네일) / 우(텍스트) 2단 레이아웃 ── */}
               <button
                 type="button"
@@ -1162,16 +1162,16 @@ export default function Shops() {
                       <span><span style={{ fontFamily: '"Apple Color Emoji","Segoe UI Emoji","Noto Color Emoji",sans-serif' }}>{catEmoji(s.cat)}</span> {catLabel(s.cat)}</span>
                     </div>
 
-                    {s.sub && (
-                      <div className="su-shop-desc su-shop-card__desc">
-                        {s.sub}
-                      </div>
-                    )}
+                      {s.sub && (
+                        <div className="su-shop-desc su-shop-card__desc">
+                          {s.sub}
+                        </div>
+                      )}
 
-                    <div className="su-shop-card__footer">
-                      <div className="su-shop-meta su-shop-card__address">📍 {s.address || '-'}</div>
-                      <div className="su-shop-card__hint">상세 보기</div>
-                    </div>
+                      <div className="su-shop-card__footer">
+                        <div className="su-shop-meta su-shop-card__address">📍 {s.address || '-'}</div>
+                        <div className="su-shop-card__hint">상세 보기</div>
+                      </div>
                   </div>
                 </div>
               </button>
@@ -1923,8 +1923,8 @@ function _mapAdminShopToUI(s) {
 function normalizeShopAssetUrl(raw) {
   const text = String(raw || '').trim();
   if (!text) return '';
-  if (text.startsWith('/uploads/') && !text.startsWith('/uploads/banners/') && !text.startsWith('/uploads/supplies/') && !text.startsWith('/uploads/videos/')) {
-    const filename = text.replace('/uploads/', '');
+  if (text.startsWith('/uploads/') && !text.slice('/uploads/'.length).includes('/')) {
+    const filename = text.slice('/uploads/'.length);
     return `/uploads/banners/${filename}`;
   }
   return text;

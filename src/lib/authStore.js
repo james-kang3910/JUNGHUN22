@@ -503,6 +503,15 @@ export async function signIn({ email, userId, phone, identifier, password }) {
     const loginResult = await storageAdapter.login(payload);
 
     const isLoginSuccess = !!loginResult && (loginResult.ok === true || loginResult.success === true);
+    if (loginResult?.mustChangePassword) {
+      return {
+        ok: true,
+        mustChangePassword: true,
+        email: loginResult.member?.email || loginIdentifier,
+        memberId: loginResult.member?.memberId,
+        message: loginResult.message || '비밀번호 변경이 필요합니다.',
+      };
+    }
     if (!isLoginSuccess || !loginResult.member || !loginResult.token) {
       throw new Error(loginResult?.error || '로그인에 실패했습니다.');
     }
@@ -549,6 +558,12 @@ export async function signIn({ email, userId, phone, identifier, password }) {
     console.error("[signIn] Error:", e);
     throw e;
   }
+}
+
+/** 임시 비밀번호 로그인 후 새 비밀번호 설정 */
+export async function changePasswordAndSignIn({ email, currentPassword, newPassword }) {
+  await storageAdapter.changePassword({ email, currentPassword, newPassword });
+  return signIn({ email, password: newPassword });
 }
 
 // 개발 중 legacy key 자동 정리 (옵션)

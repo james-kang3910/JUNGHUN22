@@ -5,6 +5,7 @@ import { isAdminAuthenticatedLocal } from "./lib/adminAuth";
 import { ensureMemberProfile } from "./lib/memberStore";
 import * as storageAdapter from "./lib/storageAdapter";
 import * as shopStore from "./lib/shopStore";
+import { isPointsTransferEnabled } from "./lib/pointsGuard";
 import {
   hydrateAuthFromServer,
   isLoggedIn as isLoggedInMemory,
@@ -61,6 +62,12 @@ import Support from "./pages/Support";
 import Distribution from "./pages/Distribution";
 import Card from "./pages/Card";
 import SiteConfirmModal from "./components/SiteConfirmModal";
+import BusinessCardPreview from "./components/BusinessCardPreview";
+import {
+  downloadBusinessCardImage as downloadCardImageCore,
+  shareBusinessCardImage as shareCardImageCore,
+  readCardFieldsFromRecord as readBusinessCardFields,
+} from "./lib/businessCardCore";
 
 // ⚡ 코드 스플리팅: 관리자 페이지는 lazy loading
 const AdminLogin = lazy(() => import("./pages/admin/AdminLogin"));
@@ -3890,7 +3897,7 @@ function SimpleSavedCardPage() {
       try {
         const card = await storageAdapter.fetchCardBySlug(slug);
         if (cancelled) return;
-        const resolved = readCardFieldsFromRecord(card, {});
+        const resolved = readBusinessCardFields(card, {});
         setCardState({
           form: resolved.form,
           themeKey: resolved.themeKey,
@@ -3914,7 +3921,7 @@ function SimpleSavedCardPage() {
 
   const handleDownload = async () => {
     try {
-      await downloadBusinessCardImage(cardState.form, cardState.themeKey, cardState.orientation, cardState.cardSlug);
+      await downloadCardImageCore(cardState.form, cardState.themeKey, cardState.cardSlug);
       setToast("이미지를 저장했습니다.");
     } catch (error) {
       setToast("이미지 저장에 실패했습니다.");
@@ -3924,7 +3931,7 @@ function SimpleSavedCardPage() {
   const handleShare = async () => {
     try {
       setSharing(true);
-      const result = await shareBusinessCardImage(cardState.form, cardState.themeKey, cardState.orientation, cardState.cardSlug);
+      const result = await shareCardImageCore(cardState.form, cardState.themeKey, cardState.cardSlug);
       if (result === "shared") setToast("카톡 전송 창을 열었습니다.");
       else if (result === "copied") setToast("명함 정보를 복사했습니다.");
       else setToast("이 기기에서는 공유를 지원하지 않습니다.");
@@ -3974,7 +3981,9 @@ function SimpleSavedCardPage() {
           <div style={{ fontSize: 24, fontWeight: 900, color: "#0f172a", letterSpacing: "-0.03em" }}>저장된 명함</div>
           <button type="button" onClick={() => navigate("/my")} style={{ minHeight: 42, padding: "0 16px", borderRadius: 14, border: "1px solid rgba(148,163,184,0.28)", background: "rgba(255,255,255,0.9)", color: "#334155", fontSize: 14, fontWeight: 800, cursor: "pointer" }}>내 정보로 이동</button>
         </div>
-        <BusinessCardSurface form={cardState.form} themeKey={cardState.themeKey} orientation={cardState.orientation} />
+        <div style={{ display: "flex", justifyContent: "center", marginBottom: 4 }}>
+          <BusinessCardPreview form={cardState.form} themeKey={cardState.themeKey} />
+        </div>
         <div style={{ display: "grid", gridTemplateColumns: isOwner ? "repeat(4, minmax(0, 1fr))" : "repeat(2, minmax(0, 1fr))", gap: 10, marginTop: 16 }}>
           {isOwner ? <button type="button" onClick={() => {
             try {
@@ -4317,6 +4326,10 @@ function PointWalletBridge() {
     const { memberId } = getCurrentMemberInfo();
     const selectedShopId = String(selectedShop?.id || selectedShop?.shopId || "").trim();
     if (!memberId || !selectedShopId || amountValue <= 0) return;
+    if (!(await isPointsTransferEnabled())) {
+      setToast("현재 포인트 전송/결제가 중지되어 있습니다.");
+      return;
+    }
     if (amountValue > pointBalance) {
       setToast("보유 포인트를 초과했습니다.");
       return;
@@ -4352,49 +4365,14 @@ function PointWalletBridge() {
     }
   };
 
-  const submitPointTransferFallback = async ({ fromMemberId, toMemberId, toMemberName, amount }) => {
-    const sessionToken = String(window.__SU_SESSION__?.token || "").trim();
-    if (!sessionToken) {
-      const error = new Error("포인트 전송 API가 연결되지 않았습니다.");
-      error.status = 404;
-      throw error;
-    }
-
-    await fetchJson("/api/points/admin/grant", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${sessionToken}`,
-      },
-      body: JSON.stringify({
-        memberId: fromMemberId,
-        amount: -Math.trunc(amount),
-        type: "TRANSFER_OUT",
-        description: `포인트 전송 (→ ${toMemberName})`,
-        referenceType: "POINT_TRANSFER",
-        referenceId: `PTX-${Date.now()}`,
-      }),
-    });
-
-    await fetchJson("/api/points/admin/grant", {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${sessionToken}`,
-      },
-      body: JSON.stringify({
-        memberId: toMemberId,
-        amount: Math.trunc(amount),
-        type: "TRANSFER_IN",
-        description: `포인트 수신 (← ${getCurrentMemberInfo().memberName || fromMemberId})`,
-        referenceType: "POINT_TRANSFER",
-        referenceId: `PTX-${Date.now()}-IN`,
-      }),
-    });
-  };
-
   const submitPointTransfer = async () => {
     const { memberId, memberName } = getCurrentMemberInfo();
     const receiverId = String(selectedMember?.memberId || selectedMember?.id || "").trim();
     if (!memberId || !receiverId || amountValue <= 0) return;
+    if (!(await isPointsTransferEnabled())) {
+      setToast("현재 포인트 전송이 중지되어 있습니다.");
+      return;
+    }
     if (amountValue > pointBalance) {
       setToast("보유 포인트를 초과했습니다.");
       return;
@@ -4410,28 +4388,17 @@ function PointWalletBridge() {
 
     try {
       setActionSubmitting(true);
-      try {
-        await fetchJson("/api/points/transfer", {
-          method: "POST",
-          body: JSON.stringify({
-            fromMemberId: memberId,
-            fromMemberName: memberName,
-            toMemberId: receiverId,
-            toMemberName: selectedTargetName,
-            amount: Math.trunc(amountValue),
-            description: `포인트 전송 (→ ${selectedTargetName})`,
-          }),
-        });
-      } catch (error) {
-        const isMissingTransferRoute = error?.status === 404 || /Cannot POST\s+\/api\/points\/transfer/i.test(String(error?.message || ""));
-        if (!isMissingTransferRoute) throw error;
-        await submitPointTransferFallback({
+      await fetchJson("/api/points/transfer", {
+        method: "POST",
+        body: JSON.stringify({
           fromMemberId: memberId,
+          fromMemberName: memberName,
           toMemberId: receiverId,
           toMemberName: selectedTargetName,
-          amount: amountValue,
-        });
-      }
+          amount: Math.trunc(amountValue),
+          description: `포인트 전송 (→ ${selectedTargetName})`,
+        }),
+      });
       window.dispatchEvent(new CustomEvent("POINTS_UPDATED", { detail: { memberId } }));
       window.dispatchEvent(new CustomEvent("su:ssot:changed", { detail: { type: "points", operation: "member-transfer" } }));
       await loadPointData();
@@ -4440,8 +4407,6 @@ function PointWalletBridge() {
     } catch (error) {
       if (error?.status === 403) {
         setToast("포인트 전송 권한이 없어 실행되지 않았습니다.");
-      } else if (error?.status === 404 || /Cannot POST\s+\/api\/points\/transfer/i.test(String(error?.message || ""))) {
-        setToast("포인트 전송 API가 아직 연결되지 않았습니다.");
       } else {
         setToast(error?.message || "포인트 전송 중 오류가 발생했습니다.");
       }
@@ -6290,7 +6255,8 @@ export default function App() {
   <VipAmountDisplayBridge />
   <VipMemberSummaryBridge />
   <MyOfficeHeroCleanupBridge />
-  <CardCreateExperienceBridge />
+  {/* CardCreateModal이 명함 디자인/저장을 직접 처리 — DOM 브릿지 비활성화 */}
+  {/* <CardCreateExperienceBridge /> */}
   <PointWalletBridge />
   <style>{appNeonHomeStyles}</style>
   {/* Padding-bottom ensures page content isn't hidden behind the fixed BottomNav */}

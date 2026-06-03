@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, useParams, useLocation } from 'react-router-dom';
 import * as storageAdapter from '../lib/storageAdapter';
+import { resolvePublicAuthorName } from '../lib/noticeUtils';
 import ContextHeader from '../components/ContextHeader';
 
 console.log('[PAGE]', 'NoticeDetail.jsx (active)');
@@ -186,7 +187,9 @@ export default function NoticeDetail() {
             borderBottom: '1px solid #DDE3EA',
             marginBottom: 16,
           }}>
-            <div>✍️ {notice.author || '관리자'}</div>
+            {resolvePublicAuthorName(notice.author, notice.authorName, notice.author_name) ? (
+              <div>✍️ {resolvePublicAuthorName(notice.author, notice.authorName, notice.author_name)}</div>
+            ) : null}
             <div>📅 {new Date(notice.createdAt).toLocaleDateString('ko-KR', {
               year: 'numeric',
               month: 'long',

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useCallback, useMemo } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
-import { signUp, signIn, getAuthInfo, validatePassword } from "../lib/authStore";
+import { signUp, signIn, getAuthInfo, validatePassword, changePasswordAndSignIn } from "../lib/authStore";
 import { clearPendingTab } from "../components/Bottomnav";
 import * as storageAdapter from "../lib/storageAdapter";
 import * as smsService from "../lib/smsService";
@@ -147,6 +147,12 @@ export default function Auth() {
   const [findPwErrors, setFindPwErrors] = useState({});
   const [pwResetForm, setPwResetForm] = useState({ password: "", passwordConfirm: "" });
   const [pwResetErrors, setPwResetErrors] = useState({});
+
+  // 임시 비밀번호 → 강제 변경
+  const [mustChangeContext, setMustChangeContext] = useState(null);
+  const [mustChangeForm, setMustChangeForm] = useState({ password: "", passwordConfirm: "" });
+  const [mustChangeErrors, setMustChangeErrors] = useState({});
+  const [tempCurrentPassword, setTempCurrentPassword] = useState("");
 
   // 회원가입 폼
   const [signUpForm, setSignUpForm] = useState({
@@ -299,6 +305,10 @@ export default function Auth() {
     setFindPwErrors({});
     setPwResetErrors({});
     setSignUpErrors({});
+    setMustChangeErrors({});
+    setMustChangeForm({ password: "", passwordConfirm: "" });
+    setMustChangeContext(null);
+    setTempCurrentPassword("");
     setFindIdResult(null);
     setCodeSent(false);
     setCodeTimer(0);
@@ -343,8 +353,17 @@ export default function Auth() {
     setLoading(true);
     try {
       // 서버는 email/userId/phone 식별자를 모두 허용
-      await signIn({ email: identifier, userId: identifier, password: loginForm.password });
+      const result = await signIn({ email: identifier, userId: identifier, password: loginForm.password });
       setLoading(false);
+      if (result?.mustChangePassword) {
+        setMustChangeContext({ email: result.email || identifier, memberId: result.memberId });
+        setTempCurrentPassword(loginForm.password);
+        setMustChangeForm({ password: "", passwordConfirm: "" });
+        setMustChangeErrors({});
+        setFormError("");
+        setMode("mustChangePassword");
+        return;
+      }
       clearPendingTab();
       setSuccessMsg("로그인 성공!");
       setTimeout(() => navigate(returnTo, { replace: true }), 500);
@@ -439,6 +458,46 @@ export default function Auth() {
       setSuccessMsg("비밀번호가 변경되었습니다. 로그인해주세요.");
       setTimeout(() => switchMode("login"), 1500);
     }, 500);
+  };
+
+  // ===================== 임시 비밀번호 → 새 비밀번호 설정 =====================
+  const handleMustChangePassword = async (e) => {
+    e.preventDefault();
+    setFormError("");
+    setMustChangeErrors({});
+    const errors = {};
+    const pwResult = validatePassword(mustChangeForm.password);
+    if (!pwResult.valid) errors.password = pwResult.error;
+    if (mustChangeForm.password !== mustChangeForm.passwordConfirm) {
+      errors.passwordConfirm = "비밀번호가 일치하지 않습니다.";
+    }
+    if (Object.keys(errors).length > 0) {
+      setMustChangeErrors(errors);
+      return;
+    }
+
+    const email = mustChangeContext?.email || loginForm.userId;
+    if (!email || !tempCurrentPassword) {
+      setFormError("세션이 만료되었습니다. 임시 비밀번호로 다시 로그인해주세요.");
+      switchMode("login");
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await changePasswordAndSignIn({
+        email,
+        currentPassword: tempCurrentPassword,
+        newPassword: mustChangeForm.password,
+      });
+      setLoading(false);
+      clearPendingTab();
+      setSuccessMsg("비밀번호가 변경되었습니다. 로그인되었습니다.");
+      setTimeout(() => navigate(returnTo, { replace: true }), 800);
+    } catch (err) {
+      setLoading(false);
+      setFormError(err?.message || "비밀번호 변경에 실패했습니다.");
+    }
   };
 
   // ===================== 회원가입 =====================
@@ -705,6 +764,44 @@ export default function Auth() {
                   {loading ? "확인 중..." : "다음"}
                 </button>
               </div>
+            </form>
+          </>
+        )}
+
+        {/* ========== 임시 비밀번호 변경 (관리자 발급) ========== */}
+        {mode === "mustChangePassword" && (
+          <>
+            <h2 className="su-authTitle">🔑 새 비밀번호 설정</h2>
+            <p style={{ fontSize: 14, opacity: 0.75, marginBottom: 16, lineHeight: 1.5 }}>
+              관리자가 발급한 임시 비밀번호로 로그인하셨습니다.<br />
+              서비스 이용을 위해 새 비밀번호를 설정해주세요.
+            </p>
+            {successMsg && <div className="su-alertBox su-alertBox--success">{successMsg}</div>}
+            {formError && <div className="su-alertBox su-alertBox--error">{formError}</div>}
+            <form onSubmit={handleMustChangePassword}>
+              <div style={{ marginBottom: 12 }}>
+                <label className="su-label">새 비밀번호 <span className="su-required">*</span></label>
+                <PasswordInput
+                  value={mustChangeForm.password}
+                  onChange={(e) => setMustChangeForm({ ...mustChangeForm, password: e.target.value })}
+                  placeholder="영문+숫자 8~16자"
+                  hasError={!!mustChangeErrors.password}
+                />
+                {mustChangeErrors.password && <div className="su-fieldError">{mustChangeErrors.password}</div>}
+              </div>
+              <div style={{ marginBottom: 20 }}>
+                <label className="su-label">새 비밀번호 확인 <span className="su-required">*</span></label>
+                <PasswordInput
+                  value={mustChangeForm.passwordConfirm}
+                  onChange={(e) => setMustChangeForm({ ...mustChangeForm, passwordConfirm: e.target.value })}
+                  placeholder="비밀번호 재입력"
+                  hasError={!!mustChangeErrors.passwordConfirm}
+                />
+                {mustChangeErrors.passwordConfirm && <div className="su-fieldError">{mustChangeErrors.passwordConfirm}</div>}
+              </div>
+              <button type="submit" disabled={loading} className="su-primaryBtn" style={{ width: "100%" }}>
+                {loading ? "변경 중..." : "비밀번호 변경 후 계속"}
+              </button>
             </form>
           </>
         )}

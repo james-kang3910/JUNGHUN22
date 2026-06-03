@@ -365,6 +365,7 @@ export default function AdminDistribution() {
     try {
       await storageAdapter.updateAdminDistPayout(payoutId, { status, rejectReason });
       await loadData();
+      window.dispatchEvent(new CustomEvent('su:ssot:changed', { detail: { type: 'dist-payouts', operation: status } }));
       window.alert(`${label} 처리되었습니다.`);
     } catch (err) {
       window.alert('처리 실패: ' + (err.message || err));
@@ -836,7 +837,7 @@ export default function AdminDistribution() {
                     return (
                       <tr key={pid}>
                         <td style={S.td}>#{pid}</td>
-                        <td style={S.td}>{p.seller_id || p.sellerId || '-'}</td>
+                        <td style={S.td}>{p.seller_name || p.sellerName || p.seller_id || p.sellerId || '-'}</td>
                         <td style={S.td}>{Number(p.amount || 0).toLocaleString()}P</td>
                         <td style={S.td}>
                           <div>{p.bank_name || p.bankName || '-'}</div>
