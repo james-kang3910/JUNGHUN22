@@ -30,6 +30,10 @@ server/data/
 # Backup files
 production-backup-*.json
 *-backup-*.json
+backups/
+smi-backup-*.zip
+smi-final-reference-*.zip
+tmp_check_*.js
 
 # Editor directories and files
 .vscode/*

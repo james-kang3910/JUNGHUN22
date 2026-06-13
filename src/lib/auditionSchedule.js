@@ -120,3 +120,36 @@ export function getAuditionDisplayBadge(item, voteRank, auditionClosed) {
   if (Number(voteRank) >= 1 && Number(voteRank) <= 3) return `${voteRank}위`;
   return '';
 }
+
+export function getAuditionLatestTimestamp(item) {
+  const updated = parseDate(item?.updatedAt || item?.updated_at)?.getTime() || 0;
+  const created = parseDate(item?.createdAt || item?.created_at)?.getTime() || 0;
+  return Math.max(updated, created);
+}
+
+export function isAuditionOngoingForHome(item) {
+  const status = getAuditionScheduleStatus(item);
+  return status === 'active' || status === 'upcoming';
+}
+
+export function compareAuditionsByLatest(left, right) {
+  const leftTs = getAuditionLatestTimestamp(left);
+  const rightTs = getAuditionLatestTimestamp(right);
+  if (rightTs !== leftTs) return rightTs - leftTs;
+
+  const leftId = Number(left?.auditionId || left?.audition_id || left?.id || 0);
+  const rightId = Number(right?.auditionId || right?.audition_id || right?.id || 0);
+  return rightId - leftId;
+}
+
+/** 메인/하이라이트용: 공개·진행중(접수예정/접수중) 오디션 중 최신 1건 */
+export function pickLatestAudition(list) {
+  const rows = (Array.isArray(list) ? list : []).filter(Boolean);
+  if (!rows.length) return null;
+
+  const published = rows.filter((item) => item?.published !== false);
+  const pool = published.length ? published : rows;
+  const ongoing = pool.filter(isAuditionOngoingForHome);
+  if (!ongoing.length) return null;
+  return [...ongoing].sort(compareAuditionsByLatest)[0] || null;
+}

@@ -243,9 +243,7 @@ export default function BottomNav(props) {
 
   // ★ 하단 배너 광고 슬롯
   const [bottomBanner, setBottomBanner] = useState(null);
-  const [bannerClosed, setBannerClosed] = useState(() => {
-    try { return sessionStorage.getItem('su_banner_closed') === '1'; } catch { return false; }
-  });
+  const [bannerClosed, setBannerClosed] = useState(false);
   useEffect(() => {
     fetch('/api/banners?type=bottom_banner&is_active=true')
       .then(r => r.ok ? r.json() : null)
@@ -457,7 +455,7 @@ export default function BottomNav(props) {
           )}
           <button
             type="button"
-            onClick={() => { setBannerClosed(true); try { sessionStorage.setItem('su_banner_closed', '1'); } catch {} }}
+            onClick={() => setBannerClosed(true)}
             style={{ background: 'none', border: 'none', padding: '4px 0 4px 8px', cursor: 'pointer', color: '#94A3B8', fontSize: 18, lineHeight: 1 }}
             aria-label="배너 닫기"
           >✕</button>

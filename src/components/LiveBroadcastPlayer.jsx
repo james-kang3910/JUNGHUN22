@@ -111,27 +111,12 @@ export default function LiveBroadcastPlayer() {
   }, [attachRemoteStream]);
 
   if (!isLive) {
-    return (
-      <div style={{
-        padding: '5px 12px',
-        borderRadius: 8,
-        background: 'rgba(30,41,59,0.05)',
-        border: '1px solid rgba(30,41,59,0.10)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 6,
-        fontSize: 11,
-        color: '#94A3B8',
-      }}>
-        <span style={{ fontSize: 8 }}>⚫</span>
-        방송 없음
-        {/* video 엘리먼트를 조기 마운트하지 않음 — isLive 전환 후 useEffect에서 스트림 연결 */}
-      </div>
-    );
+    return null;
   }
 
   return (
     <div style={{
+      marginBottom: 16,
       borderRadius: 12,
       overflow: 'hidden',
       background: '#000',

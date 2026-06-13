@@ -27,6 +27,72 @@ export function getAppRegionBaseHost() {
   return 'smi.ceo';
 }
 
+/** 2차 도메인 URL 사용 (ulsan.smi.ceo). path=짧은 경로(smi.ceo/ulsan) */
+export function isRegionSubdomainUrlMode() {
+  const mode = String(import.meta.env.VITE_REGION_URL_MODE || '').trim().toLowerCase();
+  if (mode === 'subdomain') return true;
+  if (mode === 'path') return false;
+  return String(import.meta.env.VITE_USE_REGION_SUBDOMAIN || '').trim().toLowerCase() === 'true';
+}
+
+export function buildRegionSubdomainHost(slug) {
+  const key = String(slug || '').trim().toLowerCase();
+  if (!key || REGION_SUBDOMAIN_BLOCKLIST.has(key)) return '';
+  return `${key}.${getAppRegionBaseHost()}`;
+}
+
+/** 절대 URL — QR·지역 선택·도메인 전환용 (예: https://ulsan.smi.ceo/chat) */
+export function buildRegionSubdomainUrl(regionId, subPath = '', options = {}) {
+  const slug = String(options.slug || regionId || '').trim().toLowerCase();
+  const host = buildRegionSubdomainHost(slug);
+  if (!host) return '';
+  const sub = normalizeSubPath(subPath);
+  const envBase = String(import.meta.env.VITE_PUBLIC_SITE_URL || '').trim();
+  let originPrefix = 'https://';
+  if (envBase.startsWith('http://') || envBase.startsWith('https://')) {
+    try {
+      originPrefix = `${new URL(envBase).protocol}//`;
+    } catch {
+      originPrefix = 'https://';
+    }
+  } else if (typeof window !== 'undefined') {
+    originPrefix = `${window.location.protocol}//`;
+  }
+  return `${originPrefix}${host}${sub || '/'}`;
+}
+
+/**
+ * 지역 이동 대상 — 서브도메인 모드면 전체 URL, 아니면 SPA 경로
+ * @returns {{ type: 'external', url: string } | { type: 'internal', path: string }}
+ */
+export function resolveRegionNavigationTarget(regionId, subPath = '', options = {}) {
+  const slug = String(options.slug || regionId || '').trim().toLowerCase();
+  if (isRegionSubdomainUrlMode()) {
+    const currentSlug = getRegionSlugFromHostname();
+    const onMainHost = !currentSlug;
+    const switchingRegion = currentSlug && slug && currentSlug !== slug;
+    if (onMainHost || switchingRegion) {
+      const url = buildRegionSubdomainUrl(regionId, subPath, { ...options, slug });
+      if (url) return { type: 'external', url };
+    }
+  }
+  return { type: 'internal', path: buildRegionPath(regionId, subPath, { ...options, slug }) };
+}
+
+/** React Router navigate + 서브도메인 전환(window.location) */
+export function navigateToRegion(navigate, regionId, subPath = '', options = {}) {
+  const { replace = false, ...rest } = options;
+  const target = resolveRegionNavigationTarget(regionId, subPath, rest);
+  if (target.type === 'external') {
+    if (replace) window.location.replace(target.url);
+    else window.location.assign(target.url);
+    return;
+  }
+  if (typeof navigate === 'function') {
+    navigate(target.path, replace ? { replace: true } : undefined);
+  }
+}
+
 export function isReservedRegionPathSegment(segment) {
   const key = String(segment || '').trim().toLowerCase();
   if (!key) return true;

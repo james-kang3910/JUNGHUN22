@@ -9,12 +9,45 @@ import logo from "../assets/logo.png";
 import { useNavigate } from "react-router-dom";
 import { parseYouTubeId, isYouTubeUrl, isDirectVideoUrl as isDirectVideoUrlUtil } from "../lib/videoUtils";
 import { getLatestShareBroadcasts } from "../lib/shareBroadcastStore";
-import { getMissions, getEvents, calculateStatus, getPublicNotices, getAuditions } from "../lib/adminStore";
-import { normalizeAuditionRankLabel } from "../lib/auditionSchedule";
+import { getMissions, getEvents, calculateStatus, getPublicNotices } from "../lib/adminStore";
+import { normalizeAuditionRankLabel, pickLatestAudition, isAuditionOngoingForHome } from "../lib/auditionSchedule";
 import * as storageAdapter from "../lib/storageAdapter";
 import { resolvePublicAuthorName } from "../lib/noticeUtils";
 import LiveBroadcastPlayer from "../components/LiveBroadcastPlayer";
 import useAutoRefresh from "../hooks/useAutoRefresh";
+
+const HOME_WEATHER_CACHE_KEY = 'su:home:weather:v1';
+const HOME_WEATHER_CACHE_MS = 60 * 60 * 1000;
+
+function formatWeatherTimeKst(timeValue) {
+  const raw = String(timeValue || '').trim();
+  if (!raw) {
+    return new Date().toLocaleString('ko-KR', {
+      timeZone: 'Asia/Seoul',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).replace(/\. /g, '.').replace(/\.$/, '');
+  }
+
+  const matched = raw.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/);
+  if (matched) {
+    return `${matched[2]}.${matched[3]}. ${matched[4]}:${matched[5]}`;
+  }
+
+  const parsed = new Date(raw);
+  if (Number.isNaN(parsed.getTime())) return raw;
+  return parsed.toLocaleString('ko-KR', {
+    timeZone: 'Asia/Seoul',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }).replace(/\. /g, '.').replace(/\.$/, '');
+}
 
 function CardMediaBox({ children }) {
   // 바깥 래퍼만 su-cardThumb, 내부 su-mediaWrap은 VideoEmbed가 담당
@@ -26,39 +59,27 @@ function CardMediaBox({ children }) {
 }
 
 import { isRegionRegistered } from "../lib/regionUtils";
-
-const HOME_NOTICE_POPUP_SESSION_KEY = 'su:home:notice-popup:last-token';
-
-function getViewerMemberId() {
-  try {
-    return String(window.__SU_SESSION__?.memberId || '').trim();
-  } catch (e) {}
-  return '';
-}
-
-function getNoticePopupSessionKey() {
-  const memberId = getViewerMemberId();
-  return `${HOME_NOTICE_POPUP_SESSION_KEY}:${memberId || 'guest'}`;
-}
+import {
+  dismissNoticeForToday,
+  getNoticePopupToken,
+  isNoticeDismissedForToday,
+  isPopupEnabled,
+  resolveNoticeImageUrl,
+} from "../lib/noticePopupUtils";
 
 function getViewerRegionId() {
   try {
     const selectedRegionId = localStorage.getItem('selectedRegionId');
     if (selectedRegionId) return String(selectedRegionId).trim();
-  } catch (e) {}
+  } catch (e) {
+    // noop
+  }
   try {
     return String(window.__SU_SESSION__?.regionId || '').trim();
-  } catch (e) {}
+  } catch (e) {
+    // noop
+  }
   return '';
-}
-
-function isPopupEnabled(item) {
-  const camel = item?.isPopup;
-  const snake = item?.is_popup;
-  const raw = camel !== undefined ? camel : snake;
-  if (raw === true || raw === 1) return true;
-  const normalized = String(raw || '').trim().toLowerCase();
-  return normalized === 'true' || normalized === '1' || normalized === 'y' || normalized === 'yes';
 }
 
 function inferNoticeRegionName(item, regionNameMap = {}) {
@@ -108,14 +129,6 @@ function getNoticeAudienceLabel(item, regionNameMap = {}) {
     return regionLabel || '지역공지';
   }
   return '전체공지';
-}
-
-function resolveNoticeImageUrl(item) {
-  const raw = String(item?.imageUrl || item?.image_url || '').trim();
-  if (!raw) return '';
-  if (/^https?:\/\//i.test(raw) || raw.startsWith('data:')) return raw;
-  const base = import.meta.env.VITE_API_BASE || '';
-  return `${base}${raw}`;
 }
 
 export default function Home() {
@@ -170,7 +183,7 @@ export default function Home() {
       { key: "mission", title: "미션 / 이벤트", sub: "참여형 프로그램", icon: "🎯", tone: "pink" },
       { key: "community", title: "커뮤니티", sub: "클럽 · 모임", icon: "👥", tone: "violet" },
       { key: "support", title: "보급 · 지원", sub: "물품 · 담당자", icon: "🎁", tone: "orange" },
-      { key: "broadcast", title: "공유방송", sub: "라이브 · 동영상", icon: "📡", tone: "indigo" },
+      { key: "broadcast", title: "지역공유 발전방송", sub: "라이브 · 동영상", icon: "📡", tone: "indigo" },
       { key: "audition", title: "오디션", sub: "응모 · TOP 3 투표", icon: "🎤", tone: "red" },
       { key: "card", title: "마이오피스", sub: "내정보", icon: "🏢", tone: "navy" },
       { key: "distribution", title: "유통지원", sub: "상품 · 유통 · 지원", icon: "📦", tone: "orange" },
@@ -232,21 +245,16 @@ export default function Home() {
   const [notice, setNotice] = useState(null);
   const [latestNoticeList, setLatestNoticeList] = useState([]);
   const [noticeRegionNameMap, setNoticeRegionNameMap] = useState({});
-
-  const getCurrentNoticeId = useCallback((item) => {
-    return String(item?.id || item?.noticeId || item?.notice_id || '').trim();
-  }, []);
-
-  const getNoticePopupToken = useCallback((item) => {
-    const noticeId = getCurrentNoticeId(item);
-    if (!noticeId) return '';
-    const version = String(item?.updatedAt || item?.updated_at || item?.createdAt || item?.created_at || '').trim();
-    return version ? `${noticeId}:${version}` : noticeId;
-  }, [getCurrentNoticeId]);
+  const autoPopupShownRef = useRef(false);
 
   const closeNoticePopup = useCallback(() => {
     setNoticeModalOpen(false);
   }, []);
+
+  const hideNoticeForToday = useCallback(() => {
+    if (notice) dismissNoticeForToday(notice);
+    setNoticeModalOpen(false);
+  }, [notice]);
 
   const loadHomeNotices = useCallback(async () => {
     try {
@@ -296,48 +304,22 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (!latestNoticeList.length) return;
+    if (!latestNoticeList.length || autoPopupShownRef.current) return;
     const popupEnabled = latestNoticeList.filter((item) => isPopupEnabled(item));
     const popupCandidates = popupEnabled.length ? popupEnabled : latestNoticeList.slice(0, 1);
     if (!popupCandidates.length) return;
-    try {
-      const sessionKey = getNoticePopupSessionKey();
-      const lastSeenData = sessionStorage.getItem(sessionKey) || '';
-      const now = Date.now();
-      const HOURS_24 = 24 * 60 * 60 * 1000; // 24시간을 밀리초로 변환
-      
-      // 저장된 데이터 파싱 (형식: "token|timestamp")
-      let lastSeenToken = '';
-      let lastSeenTime = 0;
-      if (lastSeenData) {
-        const parts = lastSeenData.split('|');
-        lastSeenToken = parts[0] || '';
-        lastSeenTime = parseInt(parts[1], 10) || 0;
-      }
-      
-      const popupNotice = popupCandidates.find((item) => {
-        const token = getNoticePopupToken(item);
-        if (!token) return false;
-        if (lastSeenToken === token) {
-          // 같은 공지사항이면 24시간이 지났는지 확인
-          if (now - lastSeenTime < HOURS_24) {
-            return false; // 24시간 이내이면 다시 안 보여줌
-          }
-        }
-        return true;
-      });
-      if (!popupNotice) return;
-      const noticeToken = getNoticePopupToken(popupNotice);
-      // 토큰과 타임스탬프를 함께 저장
-      sessionStorage.setItem(sessionKey, `${noticeToken}|${now}`);
-      setNotice(popupNotice);
-      setNoticeModalOpen(true);
-    } catch (e) {
-      const popupNotice = popupCandidates[0];
-      setNotice(popupNotice);
-      setNoticeModalOpen(true);
-    }
-  }, [getNoticePopupToken, latestNoticeList]);
+
+    const popupNotice = popupCandidates.find((item) => {
+      const token = getNoticePopupToken(item);
+      if (!token) return false;
+      return !isNoticeDismissedForToday(item);
+    });
+    if (!popupNotice) return;
+
+    autoPopupShownRef.current = true;
+    setNotice(popupNotice);
+    setNoticeModalOpen(true);
+  }, [latestNoticeList]);
 
   const pillShortcuts = useMemo(
     () => [],
@@ -345,20 +327,38 @@ export default function Home() {
   );
 
   const [liveRealtime, setLiveRealtime] = useState({
-    weatherSub: "실시간 날씨 불러오는 중",
+    timeLabel: "",
+    weatherSub: "날씨 불러오는 중",
     weatherTempLabel: "--°",
     weatherStateLabel: "기상 정보",
     weatherFeelLabel: "--°",
     humidityLabel: "--%",
     windLabel: "--m/s",
-    airSub: "실시간 미세먼지 불러오는 중",
+    airSub: "미세먼지 불러오는 중",
     airGradeLabel: "보통",
     pm25Label: "-",
     pm10Label: "-",
     aqiLabel: "-",
   });
 
-  const loadLiveRealtime = useCallback(async () => {
+  const loadLiveRealtime = useCallback(async (force = false) => {
+    if (!force) {
+      try {
+        const cachedRaw = sessionStorage.getItem(HOME_WEATHER_CACHE_KEY);
+        if (cachedRaw) {
+          const cached = JSON.parse(cachedRaw);
+          if (
+            cached?.data
+            && cached?.fetchedAt
+            && Date.now() - cached.fetchedAt < HOME_WEATHER_CACHE_MS
+          ) {
+            setLiveRealtime(cached.data);
+            return;
+          }
+        }
+      } catch (e) {}
+    }
+
     const lat = 37.5665;
     const lon = 126.9780;
 
@@ -398,8 +398,10 @@ export default function Home() {
       const weatherCode = weatherData?.current?.weather_code;
       const humidity = weatherData?.current?.relative_humidity_2m;
       const wind = weatherData?.current?.wind_speed_10m;
+      const observedAt = weatherData?.current?.time || airData?.current?.time || null;
+      const timeLabel = `${formatWeatherTimeKst(observedAt)} KST`;
       const weatherSub = (temp != null)
-        ? `${weatherCodeLabel(weatherCode)} · ${Math.round(temp)}°C (체감 ${Math.round(feels ?? temp)}°C)`
+        ? `체감 ${Math.round(feels ?? temp)}°C · 습도 ${humidity != null ? Math.round(humidity) : '-'}% · 바람 ${wind != null ? Math.round(wind) : '-'}m/s`
         : "날씨 정보 준비 중";
 
       const pm25 = airData?.current?.pm2_5;
@@ -419,7 +421,8 @@ export default function Home() {
         ? `PM2.5 ${pm25 != null ? Math.round(pm25) : '-'} · PM10 ${pm10 != null ? Math.round(pm10) : '-'}${aqi != null ? ` · AQI ${Math.round(aqi)}` : ''}`
         : "미세먼지 정보 준비 중";
 
-      setLiveRealtime({
+      const nextState = {
+        timeLabel,
         weatherSub,
         weatherTempLabel: temp != null ? `${Math.round(temp)}°` : "--°",
         weatherStateLabel: weatherCodeLabel(weatherCode),
@@ -431,16 +434,25 @@ export default function Home() {
         pm25Label: pm25 != null ? `${Math.round(pm25)}` : "-",
         pm10Label: pm10 != null ? `${Math.round(pm10)}` : "-",
         aqiLabel: aqi != null ? `${Math.round(aqi)}` : "-",
-      });
+      };
+
+      setLiveRealtime(nextState);
+      try {
+        sessionStorage.setItem(HOME_WEATHER_CACHE_KEY, JSON.stringify({
+          fetchedAt: Date.now(),
+          data: nextState,
+        }));
+      } catch (e) {}
     } catch (e) {
       setLiveRealtime({
-        weatherSub: "실시간 날씨 준비 중",
+        timeLabel: `${formatWeatherTimeKst()} KST`,
+        weatherSub: "날씨 정보 준비 중",
         weatherTempLabel: "--°",
         weatherStateLabel: "기상 정보",
         weatherFeelLabel: "--°",
         humidityLabel: "--%",
         windLabel: "--m/s",
-        airSub: "실시간 미세먼지 준비 중",
+        airSub: "미세먼지 정보 준비 중",
         airGradeLabel: "보통",
         pm25Label: "-",
         pm10Label: "-",
@@ -452,6 +464,8 @@ export default function Home() {
   useEffect(() => {
     loadLiveRealtime();
   }, [loadLiveRealtime]);
+
+  useAutoRefresh(() => loadLiveRealtime(true), { intervalMs: HOME_WEATHER_CACHE_MS });
 
   /* ────────── 광고 이미지 슬라이더 (서버 우선, 로컬 fallback) ────────── */
   // Fallback 배너 데이터
@@ -473,17 +487,47 @@ export default function Home() {
   const [broadcastPreviewList, setBroadcastPreviewList] = useState([]);
   const [auditionHighlight, setAuditionHighlight] = useState({ latestAudition: null, topSubmission: null });
 
+  const loadAuditionHighlight = useCallback(async () => {
+    try {
+      const highlights = await storageAdapter.getAuditionHighlights();
+      const latestFromApi = highlights?.latestAudition || null;
+      const latestId = latestFromApi?.id || latestFromApi?.auditionId || null;
+
+      if (latestFromApi && latestId && isAuditionOngoingForHome(latestFromApi)) {
+        setAuditionHighlight({
+          latestAudition: latestFromApi,
+          topSubmission: highlights?.topSubmission || null,
+        });
+        return;
+      }
+    } catch (error) {
+      console.warn('[Home] Audition highlights API failed, falling back to auditions list:', error);
+    }
+
+    try {
+      const list = await storageAdapter.getAuditions();
+      const latestAudition = pickLatestAudition(list);
+      setAuditionHighlight({ latestAudition, topSubmission: null });
+    } catch (error) {
+      console.error('[Home] Audition highlight load failed:', error);
+      setAuditionHighlight({ latestAudition: null, topSubmission: null });
+    }
+  }, []);
+
   const loadHomeDynamicContent = useCallback(async () => {
     if (!bannerHydratedRef.current) setBannerLoading(true);
     const userRegion = localStorage.getItem('selectedRegionId');
 
     try {
-      const bannersResult = await storageAdapter.getBanners(userRegion);
+      const bannersResult = await storageAdapter.getBanners(userRegion, { type: 'main' });
       let API_BASE = import.meta.env.VITE_API_BASE || "";
       if (!API_BASE && import.meta.env.DEV && typeof window !== 'undefined') {
         API_BASE = `${window.location.protocol}//${window.location.hostname}:8787`;
       }
-      const rawBanners = Array.isArray(bannersResult) ? bannersResult : [];
+      const rawBanners = (Array.isArray(bannersResult) ? bannersResult : []).filter((b) => {
+        const bannerType = String(b?.type || 'main').trim().toLowerCase();
+        return bannerType === 'main';
+      });
       const normalized = rawBanners.map(b => {
         let imageUrl = b.imageUrl || b.image_url || b.url || null;
         let videoUrl = b.videoUrl || b.video_url || null;
@@ -534,18 +578,11 @@ export default function Home() {
     }
 
     try {
-      const highlights = await storageAdapter.getAuditionHighlights().catch(async () => {
-        const list = await storageAdapter.getAuditions().catch(() => getAuditions());
-        return { latestAudition: Array.isArray(list) && list.length > 0 ? list[0] : null, topSubmission: null };
-      });
-      setAuditionHighlight({
-        latestAudition: highlights?.latestAudition || null,
-        topSubmission: highlights?.topSubmission || null,
-      });
+      await loadAuditionHighlight();
     } catch (error) {
       console.error('[Home] Audition highlight load failed:', error);
     }
-  }, []);
+  }, [loadAuditionHighlight]);
 
   // ⚡ 성능 개선: 배너, 방송, 오디션 데이터를 병렬로 로드
   useEffect(() => {
@@ -746,20 +783,7 @@ export default function Home() {
 
   // 오디션 데이터 리로드 (SSOT 변경 시)
   useEffect(() => {
-    const reload = async () => {
-      try {
-        const result = await storageAdapter.getAuditionHighlights().catch(async () => {
-          const list = await storageAdapter.getAuditions().catch(() => getAuditions());
-          return { latestAudition: Array.isArray(list) && list.length > 0 ? list[0] : null, topSubmission: null };
-        });
-        setAuditionHighlight({
-          latestAudition: result?.latestAudition || null,
-          topSubmission: result?.topSubmission || null,
-        });
-      } catch (e) {
-        console.error('[Home] reload auditions error:', e);
-      }
-    };
+    const reload = () => { loadAuditionHighlight(); };
     
     const onSsotChanged = (ev) => {
       try {
@@ -783,7 +807,7 @@ export default function Home() {
       window.removeEventListener('storage', onStorage);
       window.removeEventListener('su:ssot:changed', onSsotChanged);
     };
-  }, []);
+  }, [loadAuditionHighlight]);
 
   // Debug: inspect audition items used by the Home carousel
   useEffect(() => {
@@ -1074,26 +1098,17 @@ export default function Home() {
 
       {/* Hero - 광고 슬라이더 (최상단) */}
       <section className="su-hero2" style={{ position: "relative", overflow: "hidden" }}>
-        {/* LiveBroadcastPlayer - 실시간 방송 위젯 */}
-        <div style={{ marginBottom: 16 }}>
-          <LiveBroadcastPlayer />
-        </div>
+      {/* LiveBroadcastPlayer - 실시간 방송 (방송 중일 때만 표시, 수신 로직은 항상 유지) */}
+        <LiveBroadcastPlayer />
 
-        {/* 브랜드 타이틀 헤더 */}
-        <div style={{
-          textAlign: "center",
-          margin: "0 0 16px",
-        }}>
-          <span className="su-heroPill">
-            지역공유 발전 플랫폼
-          </span>
-        </div>
-
-        {/* 광고 이미지 캐러셀 */}
-        <div style={{
+        {/* 광고 이미지 캐러셀 — 표준 배너 비율 800×267 (3:1) */}
+        <div
+        className="su-bannerCarousel"
+        style={{
           position: "relative",
           width: '100%',
-          aspectRatio: '16 / 9',
+          aspectRatio: '3 / 1',
+          maxHeight: 140,
           margin: '0 auto',
           borderRadius: "var(--r-section)",
           overflow: "hidden",
@@ -1314,186 +1329,49 @@ export default function Home() {
               alignItems: "center", justifyContent: "center",
               gap: 8,
             }}>
-              <div style={{ color: '#aaa', fontSize: 14, fontWeight: 500 }}>배너가 없습니다.</div>
-              <div style={{ color: '#bbb', fontSize: 12 }}>관리자에게 문의하여 배너를 등록하세요.</div>
+              <div style={{ color: '#aaa', fontSize: 12, fontWeight: 500 }}>배너가 없습니다.</div>
+              <div style={{ color: '#bbb', fontSize: 11 }}>관리자에게 문의하여 배너를 등록하세요.</div>
             </div>
           )}
         </div>
       </section>
 
-      {/* ── Featured 카드 (상단 강조 섹션: 상점 + 이벤트 2개 박스) ─────────────── */}
-      <section style={{ padding: "0 16px", marginBottom: 8 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-          {/* 박스 1: 주변 상점 둘러보기 */}
-          <div className="su-featuredCard su-featuredCard--compact su-featuredCard--half" role="button" tabIndex={0}
-            onClick={() => safeTab("shops")}
-            onKeyDown={(e) => e.key === "Enter" && safeTab("shops")}
-            style={{ cursor: "pointer" }}
-          >
-            <div className="su-featuredBadge">✦ 이번 주 추천</div>
-            <h2 className="su-featuredTitle">주변 상점</h2>
-            <p className="su-featuredSub">
-              한눈에 보기
-            </p>
-            <button type="button" className="su-featuredCta" onClick={(e) => { e.stopPropagation(); safeTab("shops"); }}>
-              상점 탐색
-            </button>
+      {/* Live */}
+      <section className="su-panel su-panel--live">
+        <div
+          style={{
+            width: '100%',
+            textAlign: 'left',
+            borderRadius: 16,
+            border: '1px solid rgba(103,232,249,0.28)',
+            background: 'radial-gradient(120% 120% at 88% 8%, rgba(56,189,248,0.26), transparent 44%), radial-gradient(90% 90% at 0% 100%, rgba(45,212,191,0.24), transparent 50%), linear-gradient(165deg, #12243f 0%, #1c3f69 50%, #23608f 100%)',
+            color: '#e7f6ff',
+            padding: '11px 12px',
+            boxShadow: '0 10px 20px rgba(15,23,42,0.18), inset 0 1px 0 rgba(255,255,255,0.18)',
+            overflow: 'hidden',
+            position: 'relative',
+          }}
+        >
+          <div style={{ position: 'absolute', top: -18, right: -12, width: 72, height: 72, borderRadius: '50%', background: 'radial-gradient(circle, rgba(125,211,252,0.22), transparent 70%)', pointerEvents: 'none' }} />
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, position: 'relative', zIndex: 1 }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 9, fontWeight: 800, letterSpacing: '0.04em', color: 'rgba(231,246,255,0.72)' }}>
+                {liveRealtime.timeLabel ? `기준 ${liveRealtime.timeLabel}` : '기준 시간 확인 중'}
+              </div>
+              <div style={{ marginTop: 4, display: 'flex', alignItems: 'baseline', gap: 6, flexWrap: 'wrap' }}>
+                <span style={{ fontSize: 22, fontWeight: 900, lineHeight: 1, letterSpacing: '-0.04em' }}>{liveRealtime.weatherTempLabel}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: 'rgba(231,246,255,0.92)' }}>{liveRealtime.weatherStateLabel}</span>
+                <span style={{ fontSize: 10, color: 'rgba(231,246,255,0.76)' }}>{liveRealtime.weatherSub}</span>
+              </div>
+            </div>
+            <div style={{ fontSize: 20, lineHeight: 1, flexShrink: 0 }}>🌤️</div>
           </div>
 
-          {/* 박스 2: 상점 이벤트 */}
-          <div className="su-featuredCard su-featuredCard--compact su-featuredCard--half su-featuredCard--event" role="button" tabIndex={0}
-            onClick={() => navigate("/shops/events")}
-            onKeyDown={(e) => e.key === "Enter" && navigate("/shops/events")}
-            style={{ cursor: "pointer" }}
-          >
-            <div className="su-featuredBadge su-featuredBadge--event">🎉 진행 중 이벤트</div>
-            <h2 className="su-featuredTitle">이벤트 상점</h2>
-            <p className="su-featuredSub">
-              진행 중만 보기
-            </p>
-            <button type="button" className="su-featuredCta su-featuredCta--event" onClick={(e) => { e.stopPropagation(); navigate("/shops/events"); }}>
-              이벤트 보기
-            </button>
+          <div style={{ marginTop: 8, display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', position: 'relative', zIndex: 1 }}>
+            <span style={{ fontSize: 9, fontWeight: 800, borderRadius: 999, padding: '2px 7px', background: 'rgba(16,185,129,0.18)', border: '1px solid rgba(16,185,129,0.42)', color: '#b9f7e8' }}>미세먼지 {liveRealtime.airGradeLabel}</span>
           </div>
         </div>
       </section>
-
-      {/* 빠른 실행 타일 */}
-      <section className="su-tiles">
-        {quickTiles.map((t) => (
-          <button
-            key={t.key}
-            className={`su-tile su-tile--${t.tone}`}
-            onClick={() => handleTileNav(t.key)}
-            type="button"
-          >
-            <div className="su-tile__icon" aria-hidden="true">
-              {t.icon}
-            </div>
-            <div className="su-tile__text">
-              <div className="su-tile__title">{t.title}</div>
-              <div className="su-tile__sub">{t.sub}</div>
-            </div>
-          </button>
-        ))}
-      </section>
-
-      {(latestMissionEventData.mission || latestMissionEventData.event) ? (
-        <section className="su-panel">
-          <div className="su-panelHead">
-            <div className="su-panelTitle">최신 미션/이벤트</div>
-          </div>
-          <div className="su-missionEventGrid">
-            {/* 미션 카드 */}
-            {latestMissionEventData.mission && (
-            <div
-              className="su-missionEventCard su-missionEventCard--mission"
-              role="button"
-              tabIndex={0}
-              onClick={() => openMissionEventModal(latestMissionEventData.mission, 'mission')}
-              onKeyDown={(e) => { if (e.key === 'Enter') openMissionEventModal(latestMissionEventData.mission, 'mission'); }}
-            >
-              {latestMissionEventData.mission.isRecent && (
-                <span className="su-newBadge">NEW</span>
-              )}
-              <div className="su-cardBadge">{latestMissionEventData.mission.badge}</div>
-              <div
-                className="su-cardTitle"
-                style={{
-                  wordBreak: 'break-all',
-                  whiteSpace: 'pre-line',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  fontSize: 16,
-                  fontWeight: 800,
-                  lineHeight: 1.35,
-                  marginBottom: 2,
-                  maxWidth: '100%',
-                  display: 'block',
-                }}
-              >
-                {latestMissionEventData.mission.title}
-              </div>
-              <div
-                className="su-cardSub"
-                style={{
-                  wordBreak: 'break-all',
-                  whiteSpace: 'pre-line',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  fontSize: 14,
-                  fontWeight: 500,
-                  lineHeight: 1.5,
-                  color: '#64748b',
-                  maxWidth: '100%',
-                  display: 'block',
-                }}
-              >
-                {latestMissionEventData.mission.sub}
-              </div>
-              <div className="su-cardMeta">
-                <span>보상: {latestMissionEventData.mission.reward}</span>
-                <span>{latestMissionEventData.mission.remain}</span>
-              </div>
-            </div>
-          )}
-
-          {/* 이벤트 카드 */}
-          {latestMissionEventData.event && (
-            <div
-              className="su-missionEventCard su-missionEventCard--event"
-              role="button"
-              tabIndex={0}
-              onClick={() => openMissionEventModal(latestMissionEventData.event, 'event')}
-              onKeyDown={(e) => { if (e.key === 'Enter') openMissionEventModal(latestMissionEventData.event, 'event'); }}
-            >
-              {latestMissionEventData.event.isRecent && (
-                <span className="su-newBadge">NEW</span>
-              )}
-              <div className="su-cardBadge">{latestMissionEventData.event.badge}</div>
-              <div
-                className="su-cardTitle"
-                style={{
-                  wordBreak: 'break-all',
-                  whiteSpace: 'pre-line',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  fontSize: 16,
-                  fontWeight: 800,
-                  lineHeight: 1.35,
-                  marginBottom: 2,
-                  maxWidth: '100%',
-                  display: 'block',
-                }}
-              >
-                {latestMissionEventData.event.title}
-              </div>
-              <div
-                className="su-cardSub"
-                style={{
-                  wordBreak: 'break-all',
-                  whiteSpace: 'pre-line',
-                  overflow: 'hidden',
-                  textOverflow: 'ellipsis',
-                  fontSize: 14,
-                  fontWeight: 500,
-                  lineHeight: 1.5,
-                  color: '#64748b',
-                  maxWidth: '100%',
-                  display: 'block',
-                }}
-              >
-                {latestMissionEventData.event.sub}
-              </div>
-              <div className="su-cardMeta">
-                <span>보상: {latestMissionEventData.event.reward}</span>
-                <span>{latestMissionEventData.event.remain}</span>
-              </div>
-            </div>
-          )}
-          </div>
-        </section>
-      ) : null}
 
       {/* Notice - pv3 UX: 클릭 → 모달 */}
       <section className="su-panel su-panel--notice">
@@ -1680,7 +1558,26 @@ export default function Home() {
                 </div>
               </div>
 
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 8, padding: '8px 14px 10px', borderTop: '1px solid rgba(15,23,42,0.08)', background: 'rgba(248,250,252,0.95)' }}>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, padding: '8px 14px 10px', borderTop: '1px solid rgba(15,23,42,0.08)', background: 'rgba(248,250,252,0.95)' }}>
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    hideNoticeForToday();
+                  }}
+                  style={{
+                    borderRadius: 12,
+                    border: '1px solid rgba(148,163,184,0.40)',
+                    background: '#ffffff',
+                    color: '#64748b',
+                    minHeight: 44,
+                    fontSize: 13,
+                    fontWeight: 700,
+                    cursor: 'pointer',
+                  }}
+                >
+                  오늘 하루 그만보기
+                </button>
                 <button
                   type="button"
                   onClick={(e) => {
@@ -1689,9 +1586,9 @@ export default function Home() {
                   }}
                   style={{
                     borderRadius: 12,
-                    border: '1px solid rgba(148,163,184,0.40)',
-                    background: '#ffffff',
-                    color: '#334155',
+                    border: '1px solid rgba(14,116,144,0.35)',
+                    background: '#0e7490',
+                    color: '#ffffff',
                     minHeight: 44,
                     fontSize: 15,
                     fontWeight: 700,
@@ -1725,65 +1622,184 @@ export default function Home() {
         )}
       </section>
 
-      {/* Live */}
-      <section className="su-panel su-panel--live">
-        <div className="su-panelHead">
-          <div className="su-panelTitle">🌤️ 오늘의 날씨 · 대기질</div>
-        </div>
-
-        <div
-          style={{
-            width: '100%',
-            textAlign: 'left',
-            borderRadius: 22,
-            border: '1px solid rgba(103,232,249,0.28)',
-            background: 'radial-gradient(120% 120% at 88% 8%, rgba(56,189,248,0.26), transparent 44%), radial-gradient(90% 90% at 0% 100%, rgba(45,212,191,0.24), transparent 50%), linear-gradient(165deg, #12243f 0%, #1c3f69 50%, #23608f 100%)',
-            color: '#e7f6ff',
-            padding: '9px 11px 9px',
-            boxShadow: '0 16px 30px rgba(15,23,42,0.22), inset 0 1px 0 rgba(255,255,255,0.18)',
-            overflow: 'hidden',
-            position: 'relative',
-          }}
-        >
-          <div style={{ position: 'absolute', top: -24, right: -16, width: 124, height: 124, borderRadius: '50%', background: 'radial-gradient(circle, rgba(125,211,252,0.25), transparent 70%)', pointerEvents: 'none' }} />
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, position: 'relative', zIndex: 1 }}>
-            <div>
-              <div style={{ fontSize: 10, fontWeight: 800, letterSpacing: '0.08em', color: 'rgba(231,246,255,0.72)' }}>REALTIME WEATHER</div>
-              <div style={{ marginTop: 2, display: 'flex', alignItems: 'baseline', gap: 7 }}>
-                <span style={{ fontSize: 30, fontWeight: 900, lineHeight: 1, letterSpacing: '-0.04em' }}>{liveRealtime.weatherTempLabel}</span>
-                <span style={{ fontSize: 13, fontWeight: 700, color: 'rgba(231,246,255,0.92)' }}>{liveRealtime.weatherStateLabel}</span>
-              </div>
-              <div style={{ marginTop: 3, fontSize: 11, color: 'rgba(231,246,255,0.76)' }}>{liveRealtime.weatherSub}</div>
-            </div>
-            <div style={{ fontSize: 27, lineHeight: 1 }}>🌤️</div>
+      {/* ── Featured 카드 (상단 강조 섹션: 상점 + 이벤트 2개 박스) ─────────────── */}
+      <section className="su-homeFeatured" style={{ marginBottom: 8 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
+          {/* 박스 1: 주변 상점 둘러보기 */}
+          <div className="su-featuredCard su-featuredCard--compact su-featuredCard--half" role="button" tabIndex={0}
+            onClick={() => safeTab("shops")}
+            onKeyDown={(e) => e.key === "Enter" && safeTab("shops")}
+            style={{ cursor: "pointer" }}
+          >
+            <div className="su-featuredBadge">✦ 이번 주 추천</div>
+            <h2 className="su-featuredTitle">주변 상점</h2>
+            <p className="su-featuredSub">
+              한눈에 보기
+            </p>
+            <button type="button" className="su-featuredCta" onClick={(e) => { e.stopPropagation(); safeTab("shops"); }}>
+              상점 탐색
+            </button>
           </div>
 
-          <div style={{ marginTop: 8, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6, position: 'relative', zIndex: 1 }}>
-            <div style={{ borderRadius: 10, padding: '6px 8px', background: 'rgba(255,255,255,0.13)', border: '1px solid rgba(255,255,255,0.18)' }}>
-              <div style={{ fontSize: 9, color: 'rgba(231,246,255,0.75)' }}>체감</div>
-              <div style={{ marginTop: 1, fontSize: 12, fontWeight: 800 }}>{liveRealtime.weatherFeelLabel}</div>
-            </div>
-            <div style={{ borderRadius: 10, padding: '6px 8px', background: 'rgba(255,255,255,0.13)', border: '1px solid rgba(255,255,255,0.18)' }}>
-              <div style={{ fontSize: 9, color: 'rgba(231,246,255,0.75)' }}>습도</div>
-              <div style={{ marginTop: 1, fontSize: 12, fontWeight: 800 }}>{liveRealtime.humidityLabel}</div>
-            </div>
-            <div style={{ borderRadius: 10, padding: '6px 8px', background: 'rgba(255,255,255,0.13)', border: '1px solid rgba(255,255,255,0.18)' }}>
-              <div style={{ fontSize: 9, color: 'rgba(231,246,255,0.75)' }}>바람</div>
-              <div style={{ marginTop: 1, fontSize: 12, fontWeight: 800 }}>{liveRealtime.windLabel}</div>
-            </div>
-          </div>
-
-          <div style={{ marginTop: 7, display: 'flex', alignItems: 'center', gap: 6, position: 'relative', zIndex: 1 }}>
-            <span style={{ fontSize: 9, fontWeight: 800, borderRadius: 999, padding: '3px 8px', background: 'rgba(16,185,129,0.18)', border: '1px solid rgba(16,185,129,0.42)', color: '#b9f7e8' }}>미세먼지 {liveRealtime.airGradeLabel}</span>
-            <span style={{ fontSize: 10, color: 'rgba(231,246,255,0.80)' }}>PM2.5 {liveRealtime.pm25Label} · PM10 {liveRealtime.pm10Label} · AQI {liveRealtime.aqiLabel}</span>
+          {/* 박스 2: 상점 이벤트 */}
+          <div className="su-featuredCard su-featuredCard--compact su-featuredCard--half su-featuredCard--event" role="button" tabIndex={0}
+            onClick={() => navigate("/shops/events")}
+            onKeyDown={(e) => e.key === "Enter" && navigate("/shops/events")}
+            style={{ cursor: "pointer" }}
+          >
+            <div className="su-featuredBadge su-featuredBadge--event">🎉 진행 중 이벤트</div>
+            <h2 className="su-featuredTitle">이벤트 상점</h2>
+            <p className="su-featuredSub">
+              진행 중만 보기
+            </p>
+            <button type="button" className="su-featuredCta su-featuredCta--event" onClick={(e) => { e.stopPropagation(); navigate("/shops/events"); }}>
+              이벤트 보기
+            </button>
           </div>
         </div>
       </section>
 
+      {/* 빠른 실행 타일 */}
+      <section className="su-tiles">
+        {quickTiles.map((t) => (
+          <button
+            key={t.key}
+            className={`su-tile su-tile--${t.tone}`}
+            onClick={() => handleTileNav(t.key)}
+            type="button"
+          >
+            <div className="su-tile__icon" aria-hidden="true">
+              {t.icon}
+            </div>
+            <div className="su-tile__text">
+              <div className="su-tile__title">{t.title}</div>
+              <div className="su-tile__sub">{t.sub}</div>
+            </div>
+          </button>
+        ))}
+      </section>
+
+      {(latestMissionEventData.mission || latestMissionEventData.event) ? (
+        <section className="su-panel">
+          <div className="su-panelHead">
+            <div className="su-panelTitle">최신 미션/이벤트</div>
+          </div>
+          <div className="su-missionEventGrid">
+            {/* 미션 카드 */}
+            {latestMissionEventData.mission && (
+            <div
+              className="su-missionEventCard su-missionEventCard--mission"
+              role="button"
+              tabIndex={0}
+              onClick={() => openMissionEventModal(latestMissionEventData.mission, 'mission')}
+              onKeyDown={(e) => { if (e.key === 'Enter') openMissionEventModal(latestMissionEventData.mission, 'mission'); }}
+            >
+              {latestMissionEventData.mission.isRecent && (
+                <span className="su-newBadge">NEW</span>
+              )}
+              <div className="su-cardBadge">{latestMissionEventData.mission.badge}</div>
+              <div
+                className="su-cardTitle"
+                style={{
+                  wordBreak: 'break-all',
+                  whiteSpace: 'pre-line',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  fontSize: 16,
+                  fontWeight: 800,
+                  lineHeight: 1.35,
+                  marginBottom: 2,
+                  maxWidth: '100%',
+                  display: 'block',
+                }}
+              >
+                {latestMissionEventData.mission.title}
+              </div>
+              <div
+                className="su-cardSub"
+                style={{
+                  wordBreak: 'break-all',
+                  whiteSpace: 'pre-line',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  fontSize: 14,
+                  fontWeight: 500,
+                  lineHeight: 1.5,
+                  color: '#64748b',
+                  maxWidth: '100%',
+                  display: 'block',
+                }}
+              >
+                {latestMissionEventData.mission.sub}
+              </div>
+              <div className="su-cardMeta">
+                <span>보상: {latestMissionEventData.mission.reward}</span>
+                <span>{latestMissionEventData.mission.remain}</span>
+              </div>
+            </div>
+          )}
+
+          {/* 이벤트 카드 */}
+          {latestMissionEventData.event && (
+            <div
+              className="su-missionEventCard su-missionEventCard--event"
+              role="button"
+              tabIndex={0}
+              onClick={() => openMissionEventModal(latestMissionEventData.event, 'event')}
+              onKeyDown={(e) => { if (e.key === 'Enter') openMissionEventModal(latestMissionEventData.event, 'event'); }}
+            >
+              {latestMissionEventData.event.isRecent && (
+                <span className="su-newBadge">NEW</span>
+              )}
+              <div className="su-cardBadge">{latestMissionEventData.event.badge}</div>
+              <div
+                className="su-cardTitle"
+                style={{
+                  wordBreak: 'break-all',
+                  whiteSpace: 'pre-line',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  fontSize: 16,
+                  fontWeight: 800,
+                  lineHeight: 1.35,
+                  marginBottom: 2,
+                  maxWidth: '100%',
+                  display: 'block',
+                }}
+              >
+                {latestMissionEventData.event.title}
+              </div>
+              <div
+                className="su-cardSub"
+                style={{
+                  wordBreak: 'break-all',
+                  whiteSpace: 'pre-line',
+                  overflow: 'hidden',
+                  textOverflow: 'ellipsis',
+                  fontSize: 14,
+                  fontWeight: 500,
+                  lineHeight: 1.5,
+                  color: '#64748b',
+                  maxWidth: '100%',
+                  display: 'block',
+                }}
+              >
+                {latestMissionEventData.event.sub}
+              </div>
+              <div className="su-cardMeta">
+                <span>보상: {latestMissionEventData.event.reward}</span>
+                <span>{latestMissionEventData.event.remain}</span>
+              </div>
+            </div>
+          )}
+          </div>
+        </section>
+      ) : null}
+
       {/* Additional horizontal rails appended below '실시간 소식' */}
       <section className="su-panel">
         <div className="su-panelHead">
-          <div className="su-panelTitle">📺 공유 방송</div>
+          <div className="su-panelTitle">📺 지역공유 발전방송</div>
           <button className="su-panelMore" onClick={() => navigate("/broadcast")} type="button">
             더보기 →
           </button>
@@ -1832,7 +1848,7 @@ export default function Home() {
                 </div>
               </div>
               {broadcastPreviewList.length > 1 ? (
-                <div className="su-carouselDots" aria-label="공유 방송 슬라이드 위치">
+                <div className="su-carouselDots" aria-label="지역공유 발전방송 슬라이드 위치">
                   {broadcastPreviewList.map((b, index) => {
                     const active = index === broadcastMeta.index;
                     return (
@@ -1868,9 +1884,9 @@ export default function Home() {
               }}
             >
               <div style={{ fontSize: 30, lineHeight: 1, marginBottom: 14 }} aria-hidden="true">📺</div>
-              <div style={{ fontSize: 19, fontWeight: 800, color: '#2c3c55', marginBottom: 8 }}>공유방송 준비중</div>
+              <div style={{ fontSize: 19, fontWeight: 800, color: '#2c3c55', marginBottom: 8 }}>지역공유 발전방송 준비중</div>
               <div style={{ fontSize: 14, lineHeight: 1.6, color: '#6b7a90' }}>
-                현재 진행 중인 공유방송이 없습니다.<br />
+                현재 진행 중인 지역공유 발전방송이 없습니다.<br />
                 새로운 방송이 곧 공개됩니다.
               </div>
             </div>

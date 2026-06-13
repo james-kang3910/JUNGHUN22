@@ -488,17 +488,20 @@ export async function getShopById(shopId) {
   return unwrapItem(result, 'shop') || result;
 }
 
-export async function upsertShop(shop, memberId) {
+export async function upsertShop(shop, memberId, options = {}) {
   // Server /api/shops supports upsert via POST with ON CONFLICT
   const url = `${API_BASE}/api/shops`;
   const headers = { 'Content-Type': 'application/json' };
   if (memberId) headers['x-member-id'] = memberId;
 
+  const isCreate = !shop?.id && !shop?.shopId;
+  const maxRetries = options.maxRetries ?? (isCreate ? 1 : 2);
+
   const result = await fetchWithRetry(url, {
     method: 'POST',
     headers,
     body: JSON.stringify(shop),
-  });
+  }, maxRetries);
   
   // ✅ SSOT 이벤트 발생 (My 페이지 즉시 반영)
   window.dispatchEvent(new CustomEvent('su:ssot:changed', {
@@ -881,7 +884,10 @@ export async function getAuditions(params = {}) {
 }
 
 export async function getAuditionHighlights() {
-  return fetchWithRetry(`${API_BASE}/api/auditions/highlights`, { method: 'GET' });
+  return fetchWithRetry(`${API_BASE}/api/auditions/highlights`, {
+    method: 'GET',
+    cache: 'no-store',
+  });
 }
 
 export async function getAuditionById(auditionId) {

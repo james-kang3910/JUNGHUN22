@@ -2,6 +2,7 @@ import { useMemo, useState, useRef, useEffect, useCallback } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import PageHeader from "../components/PageHeader";
 import Toast from "../components/Toast";
+import NoticeMiniPanel from "../components/NoticeMiniPanel";
 import * as storageAdapter from "../lib/storageAdapter";
 import { getSession } from "../lib/authStore";
 import useAutoRefresh from "../hooks/useAutoRefresh";
@@ -26,6 +27,13 @@ const WEEKDAY_OPTIONS = [
   { key: 'sat', short: '토', full: '토요일' },
   { key: 'sun', short: '일', full: '일요일' },
 ];
+
+function isPublicShopListing(shop) {
+  const status = String(shop?.status || '').toLowerCase();
+  if (status !== 'approved') return false;
+  if (shop?.isPublic === false || shop?.isVisible === false) return false;
+  return true;
+}
 
 function normalizeHHMM(value) {
   const text = String(value || '').trim();
@@ -100,7 +108,6 @@ function parseMenuRows(text) {
 export default function Shops() {
   console.log('[FORENSIC] 🔍 THIS FILE IS USED: src/pages/Shops.jsx');
   const navigate = useNavigate();
-  const goHome = () => navigate("/home");
   const goBack = () => {
     try {
       window.history.back();
@@ -120,6 +127,8 @@ export default function Shops() {
   const showToast = (message, type = "error") => setToast({ open: true, message, type });
   const [showEventModal, setShowEventModal] = useState(false);
   const [eventSaving, setEventSaving] = useState(false);
+  const [registerSaving, setRegisterSaving] = useState(false);
+  const registerSavingRef = useRef(false);
   const [eventForm, setEventForm] = useState({
     shopId: "",
     title: "",
@@ -260,7 +269,7 @@ export default function Shops() {
         setLoadingShops(true);
       }
       const allShops = await storageAdapter.getShops();
-      const approved = allShops.filter(s => s.isPublic || s.status === 'approved');
+      const approved = allShops.filter(isPublicShopListing);
       const mapped = approved.map(_mapAdminShopToUI);
       setServerShops(mapped);
       hasLoadedServerShopsRef.current = true;
@@ -326,19 +335,27 @@ export default function Shops() {
     }
   }, [regionFilter]);
 
-  // ★ 동적 상점 + 서버 상점 통합
+  // ★ 공개 노출 상점만 리스트에 포함 (승인 전 pending은 제외)
   const shops = useMemo(() => {
-    const merged = [...dynamicShops, ...serverShops];
+    const merged = [
+      ...serverShops,
+      ...dynamicShops.filter(isPublicShopListing),
+    ];
     const seen = new Set();
-    // 데이터 단계에서 중복 제거해 카운트/리스트가 동일 기준을 사용하도록 고정
-    return merged.filter((shop) => {
+    const deduped = merged.filter((shop) => {
       const key = String(shop.shopId ?? shop.id ?? shop.storeId ?? '');
       if (!key) return true;
       if (seen.has(key)) return false;
       seen.add(key);
       return true;
     });
+    return deduped.sort((a, b) => (Number(b.displayOrder) || 0) - (Number(a.displayOrder) || 0));
   }, [dynamicShops, serverShops]);
+
+  const myPendingShops = useMemo(
+    () => dynamicShops.filter((shop) => String(shop?.status || '').toLowerCase() === 'pending'),
+    [dynamicShops],
+  );
 
   const handleSearch = useCallback(() => {
     setQ((prev) => String(prev || '').trim());
@@ -400,13 +417,6 @@ export default function Shops() {
       return okCat && okQ && okRegion;
     });
   }, [shops, cat, q, regionFilterActive, regionFilterId]);
-
-  const currentRegionLabel = useMemo(() => {
-    if (regionFilterActive && regionFilterId) {
-      return regions.find((region) => String(region.id) === String(regionFilterId))?.name || '지역 상권';
-    }
-    return '우리 동네 상권';
-  }, [regionFilterActive, regionFilterId, regions]);
 
   const ownShopCount = useMemo(() => dynamicShops.length, [dynamicShops]);
 
@@ -507,6 +517,8 @@ export default function Shops() {
   };
 
   const handleRegisterSubmit = async () => {
+    if (registerSavingRef.current) return;
+
     // 유효성 검사
     if (!regForm.name.trim()) {
       showToast("상점명을 입력해주세요.");
@@ -532,6 +544,11 @@ export default function Shops() {
       showToast("지역을 선택해주세요.");
       return;
     }
+
+    registerSavingRef.current = true;
+    setRegisterSaving(true);
+
+    const clientShopId = editingShop?.id || `SHOP_${Date.now()}_${Math.floor(Math.random() * 10000)}`;
 
     // 새 상점 객체 생성 (임시)
     const parsedRecommended = (recommendedMenuRows || [])
@@ -559,7 +576,7 @@ export default function Shops() {
       : '';
 
     const newShop = {
-      id: Date.now(),
+      id: clientShopId,
       name: regForm.name.trim(),
       cat: regForm.category,
       sub: regForm.sub.trim() || "새로 등록된 상점",
@@ -602,7 +619,8 @@ export default function Shops() {
   regionId: regForm.regionId || null,
   districtId: regForm.districtId || null,
         status: newShop.status,
-        isVisible: true,
+        isVisible: false,
+        isPublic: false,
         businessHours: newShop.businessHours,
         closedDay: newShop.closedDay,
         breakTime: newShop.breakTime,
@@ -612,6 +630,7 @@ export default function Shops() {
         shopImages: (regForm.shopImagePreviewUrls || []).filter((url) => typeof url === 'string' && !url.startsWith('blob:') && !url.startsWith('data:')).slice(0, 3),
       // attach current member id if available so we can reliably show pending shops to the registrant
       registeredBy: (getSession && typeof getSession === 'function') ? (getSession()?.memberId || null) : null,
+      ...(editingShop ? {} : { id: clientShopId }),
       };
       if (editingShop) {
         // ★ 서버 DB에 상점 수정 (storageAdapter 사용)
@@ -684,8 +703,7 @@ export default function Shops() {
           };
           setDynamicShops((prev) => prev.map(p => (p.id === mapped.id ? mapped : p)));
         } else {
-          // update failed: fallback to prepend newShop (but prefer not to create duplicates)
-          setDynamicShops((prev) => [newShop, ...prev]);
+          throw new Error('상점 수정에 실패했습니다.');
         }
       } else {
         // ★ 서버 DB에 상점 등록 (storageAdapter 사용)
@@ -758,38 +776,48 @@ export default function Shops() {
           };
           setDynamicShops((prev) => [mapped, ...prev]);
         } else {
-          setDynamicShops((prev) => [newShop, ...prev]);
+          throw new Error('상점 등록에 실패했습니다.');
         }
       }
-    } catch (e) {
-      setDynamicShops((prev) => [newShop, ...prev]);
-    }
 
-  // 모달 닫기 및 리셋
-  setShowModal(false);
-  setEditingShop(null);
-    setRegForm({
-      name: "",
-      category: "food",
-      sub: "",
-      ownerName: "",
-      ownerPhone: "",
-      regionId: null,
-      address: "",
-      lat: null,
-      lng: null,
-      businessHours: "",
-      closedDay: "",
-      breakTime: "",
-      recommendedMenusText: "",
-      menusText: "",
-      amenities: [],
-      photoFile: null,
-      photoPreviewUrl: null,
-      shopImageFiles: [],
-      shopImagePreviewUrls: [],
-    });
-    showToast("등록이 완료되었습니다. 관리자 승인 후 공개됩니다.", "success");
+      const wasEditing = !!editingShop;
+
+      setShowModal(false);
+      setEditingShop(null);
+      setRegForm({
+        name: "",
+        category: "food",
+        sub: "",
+        ownerName: "",
+        ownerPhone: "",
+        regionId: null,
+        address: "",
+        lat: null,
+        lng: null,
+        businessHours: "",
+        closedDay: "",
+        breakTime: "",
+        recommendedMenusText: "",
+        menusText: "",
+        amenities: [],
+        photoFile: null,
+        photoPreviewUrl: null,
+        shopImageFiles: [],
+        shopImagePreviewUrls: [],
+      });
+      showToast(
+        wasEditing
+          ? "상점 정보가 수정되었습니다."
+          : "등록이 완료되었습니다. 관리자 승인 후 공개됩니다.",
+        "success"
+      );
+    } catch (e) {
+      console.error('[Shops] Register submit failed:', e);
+      showToast(e?.message || "상점 등록에 실패했습니다. 다시 시도해주세요.", "error");
+    } finally {
+      registerSavingRef.current = false;
+      setRegisterSaving(false);
+    }
   };
 
   const handleModalClose = () => {
@@ -876,17 +904,10 @@ export default function Shops() {
 
   return (
     <div className="su-page su-page--shops">
-      <PageHeader title="상권 / 혜택" onBack={goBack} action={{ label: "홈", onClick: goHome }} />
+      <PageHeader title="상권 / 혜택" onBack={goBack} />
 
-      {/* ★ 1. 검색 + 필터 — Action Layer */}
+      {/* ★ 1. 검색 — Action Layer */}
       <section className="su-shops-search">
-        <div className="su-shops-search__topline">
-          <div>
-            <div className="su-shops-search__eyebrow">LOCAL CURATION</div>
-            <div className="su-shops-search__headline">{currentRegionLabel}에서 찾는 상점 · 혜택</div>
-          </div>
-        </div>
-
         <div className="su-shops-search__inputRow">
           <input
             value={q}
@@ -910,63 +931,12 @@ export default function Shops() {
             검색
           </button>
         </div>
-
-        <div className="su-shops-search__summary">
-          <span>카테고리 {cats.find((item) => item.key === cat)?.label || '전체'}</span>
-          <span>내 상점 {ownShopCount}곳</span>
-          <span>이벤트 진행 {liveEventCount}곳</span>
-        </div>
-
-        {/* 카테고리 칩 */}
-        <div className="su-shops-chipRow">
-          {cats.map((c) => (
-            <button key={c.key} type="button" className={`su-shops-chip${cat === c.key ? " is-active" : ""}`} onClick={() => setCat(c.key)}>
-              <span className="su-shops-chip__emoji">{c.emoji}</span>
-              {c.label}
-            </button>
-          ))}
-
-          {/* ★ 지역 필터 칩 (1회성 토글) */}
-          {regionFilterActive && regionFilterId && (
-            <button
-              type="button"
-              className="su-shops-chip is-active"
-              style={{ display: "flex", alignItems: "center", gap: 6 }}
-              onClick={() => {
-                setRegionFilterActive(false);
-                setRegionFilterId(null);
-                navigate('/shops', { replace: true });
-              }}
-            >
-              📍 {regions.find(r => String(r.id) === String(regionFilterId))?.name || '지역'}
-              <span style={{ fontSize: 16, lineHeight: 1 }}>×</span>
-            </button>
-          )}
-        </div>
       </section>
 
       {/* ★ 2. 상점 등록 CTA — Hero Layer */}
       <div className="su-shops-hero">
         <div className="su-shops-hero__content">
-          <div>
-            <div className="su-shops-hero__eyebrow">SHOP PROMOTION STUDIO</div>
-            <div className="su-shops-hero__title">내 상점을 등록하고 바로 노출하세요</div>
-            <div className="su-shops-hero__sub">상권 메인에서 주민들에게 보이고, 이벤트까지 한 번에 연결할 수 있습니다.</div>
-          </div>
-          <div className="su-shops-hero__stats">
-            <div className="su-shops-hero-stat">
-              <strong>{filtered.length}</strong>
-              <span>노출 상점</span>
-            </div>
-            <div className="su-shops-hero-stat">
-              <strong>{ownShopCount}</strong>
-              <span>내 상점</span>
-            </div>
-            <div className="su-shops-hero-stat">
-              <strong>{liveEventCount}</strong>
-              <span>이벤트</span>
-            </div>
-          </div>
+          <div className="su-shops-hero__sub">관리자 승인이 완료되면 상권메인에 노출이 됩니다</div>
         </div>
         <div className="su-shops-hero__actions">
           <button type="button" className="su-shops-hero-btn"
@@ -1010,11 +980,61 @@ export default function Shops() {
         </div>
       </div>
 
+      {myPendingShops.length > 0 && (
+        <div style={{
+          marginTop: 12,
+          padding: '12px 14px',
+          borderRadius: 12,
+          background: '#fffbeb',
+          border: '1px solid #fde68a',
+          color: '#92400e',
+          fontSize: 13,
+          lineHeight: 1.5,
+        }}>
+          승인 대기 중인 내 상점 {myPendingShops.length}개 — 관리자 승인 후 상점 리스트에 노출됩니다.
+        </div>
+      )}
+
+      <NoticeMiniPanel style={{ marginTop: 20 }} />
+
       {/* ★ 3. 상점 리스트 — List Layer */}
-      <section style={{ marginTop: 20 }}>
+      <section style={{ marginTop: 0 }}>
         <div className="su-shops-listHeader">
           <div>
             <div className="su-shops-listHeader__title">상점 리스트</div>
+          </div>
+        </div>
+
+        <div className="su-shops-listFilters">
+          <div className="su-shops-search__summary">
+            <span>카테고리 {cats.find((item) => item.key === cat)?.label || '전체'}</span>
+            <span>내 상점 {ownShopCount}곳</span>
+            <span>이벤트 진행 {liveEventCount}곳</span>
+          </div>
+
+          <div className="su-shops-chipRow">
+            {cats.map((c) => (
+              <button key={c.key} type="button" className={`su-shops-chip${cat === c.key ? " is-active" : ""}`} onClick={() => setCat(c.key)}>
+                <span className="su-shops-chip__emoji">{c.emoji}</span>
+                {c.label}
+              </button>
+            ))}
+
+            {regionFilterActive && regionFilterId && (
+              <button
+                type="button"
+                className="su-shops-chip is-active"
+                style={{ display: "flex", alignItems: "center", gap: 6 }}
+                onClick={() => {
+                  setRegionFilterActive(false);
+                  setRegionFilterId(null);
+                  navigate('/shops', { replace: true });
+                }}
+              >
+                📍 {regions.find(r => String(r.id) === String(regionFilterId))?.name || '지역'}
+                <span style={{ fontSize: 16, lineHeight: 1 }}>×</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -1153,7 +1173,6 @@ export default function Shops() {
                           {isMine && <span className="su-shop-card__mine">내 상점</span>}
                         </div>
                       </div>
-                      <span className="su-shop-card__chevron">↗</span>
                     </div>
 
                     <div className="su-shop-card__metaRow">
@@ -1170,7 +1189,6 @@ export default function Shops() {
 
                       <div className="su-shop-card__footer">
                         <div className="su-shop-meta su-shop-card__address">📍 {s.address || '-'}</div>
-                        <div className="su-shop-card__hint">상세 보기</div>
                       </div>
                   </div>
                 </div>
@@ -1714,19 +1732,24 @@ export default function Shops() {
               <button
                 type="button"
                 onClick={handleRegisterSubmit}
+                disabled={registerSaving}
                 style={{
                   flex: 1,
                   padding: "12px",
                   borderRadius: 10,
                   border: "none",
-                  background: "linear-gradient(135deg, #0C5460 0%, #083D4A 100%)",
+                  background: registerSaving
+                    ? "#94a3b8"
+                    : "linear-gradient(135deg, #0C5460 0%, #083D4A 100%)",
                   color: "#fff",
                   fontWeight: 700,
-                  cursor: "pointer",
+                  cursor: registerSaving ? "not-allowed" : "pointer",
                   whiteSpace: 'nowrap',
                 }}
               >
-                {editingShop ? '수정하기' : '등록하기'}
+                {registerSaving
+                  ? (editingShop ? '수정 중...' : '등록 중...')
+                  : (editingShop ? '수정하기' : '등록하기')}
               </button>
             </div>
           </div>
@@ -1766,7 +1789,7 @@ export default function Shops() {
                 style={{ width: "100%" }}
               >
                 <option value="">{dynamicShops.length > 1 ? '이벤트를 등록할 상점을 선택하세요' : '상점을 선택하세요'}</option>
-                {dynamicShops.map((s) => {
+                {dynamicShops.filter((s) => String(s.status || '').toLowerCase() === 'approved').map((s) => {
                   const sid = String(s.shopId || s.id || "");
                   if (!sid) return null;
                   return <option key={sid} value={sid}>{`${s.name} (${sid})`}</option>;
@@ -1905,6 +1928,7 @@ function _mapAdminShopToUI(s) {
     regionId: s.region_id || s.regionId || null,
     districtId: s.district_id || s.districtId || null,
     vipVoucherCount: parseInt(s.vipVoucherCount || s.vip_voucher_count) || 0, // VIP 상품권 수
+    displayOrder: Number(s.displayOrder ?? s.display_order) || 0,
     photoFile: null,
     photoPreviewUrl: primaryImage,
     address: s.address || null,

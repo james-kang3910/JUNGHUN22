@@ -194,6 +194,7 @@ export default function AdminStores() {
         list = list.filter((s) => s.regionId === regionFilter);
       }
     }
+    list.sort((a, b) => (Number(b.displayOrder) || 0) - (Number(a.displayOrder) || 0));
     return list;
   }, [shops, search, statusFilter, regionFilter]);
 
@@ -227,6 +228,7 @@ export default function AdminStores() {
       const processedData = {
         ...data,
         regionId: data.regionId || null,
+        displayOrder: Number(data.displayOrder) || 0,
       };
 
       if (editingShop) {
@@ -296,7 +298,11 @@ export default function AdminStores() {
     try {
       const shop = shops.find(s => (s.id === id) || (s.shopId === id) || (s.shop_id === id));
       if (!shop) return;
-      const payload = { ...shop, status: newStatus };
+      const payload = {
+        ...shop,
+        status: newStatus,
+        ...(newStatus === 'approved' ? { isVisible: true, isPublic: true } : {}),
+      };
       if (!payload.id && (shop.shopId || shop.shop_id)) payload.id = shop.shopId || shop.shop_id;
       await storageAdapter.upsertShop(payload);
       
@@ -364,6 +370,7 @@ export default function AdminStores() {
       ...districts.map(d => ({ value: d.id, label: d.name }))
     ]}] : []),
     { key: "status", label: "승인 상태", type: "select", options: STATUS_OPTIONS.map((s) => ({ value: s.value, label: s.label })) },
+    { key: "displayOrder", label: "노출 순서", type: "number", placeholder: "0, 10, 20… (클수록 위)" },
     { key: "isVisible", label: "노출 여부", type: "checkbox", placeholder: "노출" },
     { key: "reviewAllowed", label: "리뷰 허용", type: "checkbox", placeholder: "리뷰 허용" },
     { key: "vipVoucherCount", label: "VIP 상품권 수", type: "number", placeholder: "0" },
@@ -691,6 +698,7 @@ export default function AdminStores() {
                 <span>📍 {getRegionName(shop.regionId)}</span>
                 <span>👤 {shop.owner || "-"}</span>
                 <span>📞 {shop.phone || "-"}</span>
+                <span>🔢 순서 {Number(shop.displayOrder) || 0}</span>
               </div>
               {shop.description && (
                 <div style={{ fontSize: 13, opacity: 0.6, marginBottom: 10 }}>{shop.description}</div>
@@ -729,7 +737,7 @@ export default function AdminStores() {
         open={modalOpen}
         title={editingShop ? "상점 수정" : "상점 등록"}
         fields={formFields}
-        initialData={editingShop || { status: "pending", isVisible: true, reviewAllowed: true, vipVoucherCount: 0 }}
+        initialData={editingShop || { status: "pending", isVisible: true, reviewAllowed: true, vipVoucherCount: 0, displayOrder: 0 }}
         onSubmit={handleSave}
         onChange={(data) => setCurrentFormData(data)}
         onCancel={() => { setModalOpen(false); setDistricts([]); setCurrentFormData({}); }}

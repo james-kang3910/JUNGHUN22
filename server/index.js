@@ -998,6 +998,7 @@ async function initDatabase() {
           await db.run(`ALTER TABLE shops ADD COLUMN IF NOT EXISTS lat DECIMAL`);
           await db.run(`ALTER TABLE shops ADD COLUMN IF NOT EXISTS lng DECIMAL`);
           await db.run(`ALTER TABLE shops ADD COLUMN IF NOT EXISTS shop_images JSONB`);
+          await db.run(`ALTER TABLE shops ADD COLUMN IF NOT EXISTS display_order INTEGER DEFAULT 0`);
           // region_id 타입을 VARCHAR로 변경 (기존 INTEGER → 문자열 regionId 지원)
           await db.run(`ALTER TABLE shops ALTER COLUMN region_id TYPE VARCHAR(255) USING region_id::text`);
         } catch (e) {
@@ -1076,6 +1077,9 @@ async function initDatabase() {
         } catch (e) {}
         try {
           await db.run(`ALTER TABLE shops ADD COLUMN shopImages TEXT`);
+        } catch (e) {}
+        try {
+          await db.run(`ALTER TABLE shops ADD COLUMN displayOrder INTEGER DEFAULT 0`);
         } catch (e) {}
 
       }
@@ -2845,6 +2849,7 @@ async function initDatabase() {
         await db.run(`ALTER TABLE shops ADD COLUMN IF NOT EXISTS rating REAL DEFAULT 0`);
         await db.run(`ALTER TABLE shops ADD COLUMN IF NOT EXISTS review_count INTEGER DEFAULT 0`);
         await db.run(`ALTER TABLE shops ADD COLUMN IF NOT EXISTS shop_images JSONB`);
+        await db.run(`ALTER TABLE shops ADD COLUMN IF NOT EXISTS display_order INTEGER DEFAULT 0`);
       } catch (e) { /* 컬럼이 이미 존재할 수 있음 */ }
 
       // 7. QR 결제 내역 테이블 (상점 QR 결제 증거용)
@@ -3230,6 +3235,35 @@ const upload = multer({
 // CORS configuration
 let allowedOrigins = [];
 
+const REGION_SUBDOMAIN_ORIGIN_BLOCKLIST = new Set(['www', 'api', 'admin', 'app', 'mail', 'smtp']);
+
+function getAppRegionHostForCors() {
+  const raw = String(process.env.APP_REGION_HOST || process.env.HOSTNAME || 'smi.ceo').trim().toLowerCase();
+  return raw.replace(/^https?:\/\//, '').replace(/\/.*$/, '');
+}
+
+function isRegionSubdomainOriginAllowed(origin) {
+  if (process.env.ALLOW_REGION_SUBDOMAINS === 'false') return false;
+  try {
+    const { hostname, protocol } = new URL(origin);
+    if (protocol !== 'http:' && protocol !== 'https:') return false;
+    const baseHost = getAppRegionHostForCors();
+    if (!baseHost) return false;
+    if (hostname === baseHost || hostname === `www.${baseHost}`) return true;
+    if (!hostname.endsWith(`.${baseHost}`)) return false;
+    const sub = hostname.slice(0, -(baseHost.length + 1)).split('.').pop();
+    return !!(sub && !REGION_SUBDOMAIN_ORIGIN_BLOCKLIST.has(sub));
+  } catch (e) {
+    return false;
+  }
+}
+
+function isCorsOriginAllowed(origin) {
+  if (!origin) return true;
+  if (allowedOrigins.includes(origin)) return true;
+  return isRegionSubdomainOriginAllowed(origin);
+}
+
 // 환경변수에서 명시적으로 설정된 origins
 if (process.env.ALLOWED_ORIGINS) {
   allowedOrigins = process.env.ALLOWED_ORIGINS.split(',')
@@ -3276,7 +3310,7 @@ if (NODE_ENV === 'development') {
         return callback(null, true);
       }
       const low = String(origin).toLowerCase();
-      if (low.startsWith('http://localhost') || low.startsWith('http://127.0.0.1') || allowedOrigins.includes(origin)) {
+      if (low.startsWith('http://localhost') || low.startsWith('http://127.0.0.1') || isCorsOriginAllowed(origin)) {
         logger.debug('[CORS] Allowing origin:', origin);
         return callback(null, true);
       }
@@ -3308,7 +3342,7 @@ if (NODE_ENV === 'development') {
         logger.info('[CORS] Allowing request with no origin (Android WebView / Kakaotalk)');
         return callback(null, true);
       }
-      if (allowedOrigins.includes(origin)) {
+      if (isCorsOriginAllowed(origin)) {
         callback(null, true);
       } else {
         logger.error('[CORS] Blocked origin:', origin);
@@ -4865,8 +4899,8 @@ app.patch('/api/admin/shops/:id/approve', requireAdmin, async (req, res) => {
     const now = new Date().toISOString();
     
     const updateQuery = USE_POSTGRES
-      ? 'UPDATE shops SET status = $1, updated_at = $2 WHERE shop_id = $3'
-      : 'UPDATE shops SET status = ?, updatedAt = ? WHERE shopId = ?';
+      ? 'UPDATE shops SET status = $1, is_public = true, updated_at = $2 WHERE shop_id = $3'
+      : 'UPDATE shops SET status = ?, isPublic = 1, updatedAt = ? WHERE shopId = ?';
     await db.run(updateQuery, ['approved', now, shopId]);
     
     res.json({ ok: true, shopId, status: 'approved' });
@@ -6781,6 +6815,12 @@ function normalizeShopImages(value) {
   return [];
 }
 
+function parseShopDisplayOrder(source) {
+  const raw = source?.displayOrder ?? source?.display_order;
+  const num = parseInt(raw, 10);
+  return Number.isFinite(num) ? num : 0;
+}
+
 function normalizeShopRow(row) {
   if (!row) return null;
   if (USE_POSTGRES) {
@@ -6818,6 +6858,7 @@ function normalizeShopRow(row) {
       lat: row.lat,
       lng: row.lng,
       districtId: row.district_id || null,
+      displayOrder: parseShopDisplayOrder(row),
       shopImages,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -6874,6 +6915,7 @@ function normalizeShopRow(row) {
     amenities,
     lat: row.lat,
     lng: row.lng,
+    displayOrder: parseShopDisplayOrder(row),
     shopImages: normalizeShopImages(row.shopImages),
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -6919,6 +6961,9 @@ app.get('/api/shops', async (req, res) => {
     let query;
     let params = [];
 
+    const publicShopFilterPg = ` AND LOWER(COALESCE(s.status, 'pending')) = 'approved' AND COALESCE(s.is_public, false) = true`;
+    const publicShopFilterSqlite = ` AND LOWER(COALESCE(status, 'pending')) = 'approved' AND COALESCE(isPublic, 0) = 1`;
+
     if (USE_POSTGRES) {
       const selectBase = `SELECT s.*,
             COALESCE((SELECT SUM(vl.amount) FROM voucher_ledger vl WHERE vl.member_id = s.shop_id AND vl.target_type = 'shop' AND vl.status = 'active'), 0) AS vip_voucher_count,
@@ -6930,24 +6975,24 @@ app.get('/api/shops', async (req, res) => {
         query = `${selectBase} AND (s.owner_id = $${params.length} OR s.created_by = $${params.length})`;
       } else if (regionId) {
         params.push(regionId);
-        query = `${selectBase} AND s.region_id = $${params.length}`;
+        query = `${selectBase} AND s.region_id = $${params.length}${publicShopFilterPg}`;
         if (districtId) {
           params.push(districtId);
           query += ` AND s.district_id = $${params.length}`;
         }
       } else {
-        query = selectBase;
+        query = `${selectBase}${publicShopFilterPg}`;
       }
-      query += ` ORDER BY s.created_at DESC`;
+      query += ` ORDER BY COALESCE(s.display_order, 0) DESC, s.created_at DESC`;
     } else {
       if (ownerId) {
         query = 'SELECT * FROM shops WHERE ownerId = ? OR createdBy = ? ORDER BY createdAt DESC';
         params = [ownerId, ownerId];
       } else if (regionId) {
-        query = 'SELECT * FROM shops WHERE regionId = ? ORDER BY createdAt DESC';
+        query = `SELECT * FROM shops WHERE regionId = ?${publicShopFilterSqlite} ORDER BY COALESCE(displayOrder, 0) DESC, createdAt DESC`;
         params = [regionId];
       } else {
-        query = 'SELECT * FROM shops ORDER BY createdAt DESC';
+        query = `SELECT * FROM shops WHERE 1=1${publicShopFilterSqlite} ORDER BY COALESCE(displayOrder, 0) DESC, createdAt DESC`;
       }
     }
     const rows = await db.query(query, params);
@@ -6987,9 +7032,14 @@ app.post('/api/shops', async (req, res) => {
     
     const shopId = s.id || s.shopId || `SHOP_${Date.now()}_${Math.floor(Math.random()*10000)}`;
     const now = new Date().toISOString();
+    const shopStatus = String(s.status || 'pending').toLowerCase();
+    const shopIsPublic = shopStatus === 'approved'
+      ? Boolean(s.isPublic ?? s.isVisible ?? true)
+      : false;
     
     // Extract memberId from headers or body
     const memberId = req.headers['x-member-id'] || s.memberId || s.ownerId || s.registeredBy;
+    const displayOrder = parseShopDisplayOrder(s);
     
     let sql = null;
     let params = null;
@@ -7001,9 +7051,9 @@ app.post('/api/shops', async (req, res) => {
           is_public, status, owner_id, created_by, registered_by, created_at, updated_at,
           region_id, district_id, thumbnail, business_hours, closed_day, break_time, 
           recommended_menus, menus, amenities, lat, lng,
-          review_allowed, vip_voucher_count, shop_images
+          review_allowed, vip_voucher_count, display_order, shop_images
         )
-        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29)
+        VALUES($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, $25, $26, $27, $28, $29, $30)
         ON CONFLICT(shop_id) DO UPDATE SET
           name=EXCLUDED.name,
           category=EXCLUDED.category,
@@ -7028,6 +7078,7 @@ app.post('/api/shops', async (req, res) => {
           updated_at=EXCLUDED.updated_at,
           review_allowed=EXCLUDED.review_allowed,
           vip_voucher_count=EXCLUDED.vip_voucher_count,
+          display_order=EXCLUDED.display_order,
           shop_images=EXCLUDED.shop_images
         RETURNING shop_id
       `;
@@ -7041,8 +7092,8 @@ app.post('/api/shops', async (req, res) => {
         s.phone || '',
         s.description || '',
         s.hours || s.businessHours || '',
-        s.isPublic !== undefined ? s.isPublic : (s.isVisible !== undefined ? s.isVisible : false),
-        s.status || 'pending',
+        shopIsPublic,
+        shopStatus,
         memberId || null,
         memberId || null,
         s.registeredBy || memberId || null,
@@ -7061,6 +7112,7 @@ app.post('/api/shops', async (req, res) => {
         s.lng || null,
         s.reviewAllowed !== undefined ? s.reviewAllowed : true,
         s.vipVoucherCount !== undefined ? Number(s.vipVoucherCount) : 0,
+        displayOrder,
         s.shopImages ? JSON.stringify(s.shopImages) : null,
       ];
       await db.query(sql, params);
@@ -7098,6 +7150,7 @@ app.post('/api/shops', async (req, res) => {
         updatedAt: now,
         reviewAllowed: s.reviewAllowed !== undefined ? s.reviewAllowed : true,
         vipVoucherCount: s.vipVoucherCount !== undefined ? Number(s.vipVoucherCount) : 0,
+        displayOrder,
       };
       
       logForensicWrite({ route: '/api/shops', method: 'POST', body: req.body || {}, sql, params, dbResult: null, result: { ok: true, success: true, shopId, data: newShop } });
@@ -7109,9 +7162,9 @@ app.post('/api/shops', async (req, res) => {
           isPublic, status, ownerId, createdBy, registeredBy, createdAt, updatedAt,
           regionId, districtId, thumbnail, businessHours, closedDay, breakTime,
           recommendedMenus, menus, amenities, lat, lng,
-          review_allowed, vip_voucher_count, shopImages
+          review_allowed, vip_voucher_count, displayOrder, shopImages
         )
-        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(shopId) DO UPDATE SET
           name=excluded.name,
           category=excluded.category,
@@ -7136,6 +7189,7 @@ app.post('/api/shops', async (req, res) => {
           updatedAt=excluded.updatedAt,
           review_allowed=excluded.review_allowed,
           vip_voucher_count=excluded.vip_voucher_count,
+          displayOrder=excluded.displayOrder,
           shopImages=excluded.shopImages
       `;
       sql = query;
@@ -7148,8 +7202,8 @@ app.post('/api/shops', async (req, res) => {
         s.phone || '',
         s.description || '',
         s.hours || s.businessHours || '',
-        (s.isPublic !== undefined ? s.isPublic : (s.isVisible !== undefined ? s.isVisible : false)) ? 1 : 0,
-        s.status || 'pending',
+        shopIsPublic ? 1 : 0,
+        shopStatus,
         memberId || null,
         memberId || null,
         s.registeredBy || memberId || null,
@@ -7168,6 +7222,7 @@ app.post('/api/shops', async (req, res) => {
         s.lng || null,
         s.reviewAllowed !== undefined ? (s.reviewAllowed ? 1 : 0) : 1,
         s.vipVoucherCount !== undefined ? Number(s.vipVoucherCount) : 0,
+        displayOrder,
         s.shopImages ? JSON.stringify(s.shopImages) : null,
       ];
       const dbResult = await db.run(sql, params);
@@ -12088,36 +12143,50 @@ app.get('/api/auditions/highlights', async (req, res) => {
         `SELECT a.*, reg.name AS region_name
          FROM auditions a
          LEFT JOIN regions reg ON a.region_id = reg.region_id
-         ORDER BY a.created_at DESC
+         WHERE COALESCE(a.published, false) = true
+           AND UPPER(COALESCE(a.status, 'OPEN')) NOT IN ('CLOSED', 'CLOSE', 'ENDED', 'END')
+           AND (a.end_at IS NULL OR a.end_at >= NOW())
+         ORDER BY COALESCE(a.updated_at, a.created_at) DESC NULLS LAST, a.audition_id DESC
          LIMIT 1`,
         []
       );
 
-      topSubmissionRow = await db.get(
-        `SELECT s.*, a.title AS audition_title, a.audition_id, a.poster_url, a.image_url, a.images,
-                COALESCE((SELECT MAX(v.created_at) FROM audition_votes v WHERE v.submission_id = s.submission_id), s.created_at) AS last_vote_at
-         FROM audition_submissions s
-         JOIN auditions a ON a.audition_id = s.audition_id
-         WHERE COALESCE(s.approval_status, 'pending') = 'approved'
-         ORDER BY s.votes_count DESC, last_vote_at ASC
-         LIMIT 1`,
-        []
-      );
+      if (latestAuditionRow?.audition_id) {
+        topSubmissionRow = await db.get(
+          `SELECT s.*, a.title AS audition_title, a.audition_id, a.poster_url, a.image_url, a.images,
+                  COALESCE((SELECT MAX(v.created_at) FROM audition_votes v WHERE v.submission_id = s.submission_id), s.created_at) AS last_vote_at
+           FROM audition_submissions s
+           JOIN auditions a ON a.audition_id = s.audition_id
+           WHERE s.audition_id = $1
+             AND COALESCE(s.approval_status, 'pending') = 'approved'
+           ORDER BY s.votes_count DESC, last_vote_at ASC
+           LIMIT 1`,
+          [latestAuditionRow.audition_id]
+        );
+      }
     } else {
       latestAuditionRow = await db.get(
-        `SELECT * FROM auditions ORDER BY createdAt DESC LIMIT 1`,
-        []
-      );
-
-      topSubmissionRow = await db.get(
-        `SELECT s.*, a.title AS audition_title, a.auditionId, a.posterUrl, a.imageUrl, a.images
-         FROM audition_submissions s
-         JOIN auditions a ON a.auditionId = s.auditionId
-         WHERE COALESCE(s.approvalStatus, 'pending') = 'approved'
-         ORDER BY s.votesCount DESC, s.createdAt ASC
+        `SELECT * FROM auditions
+         WHERE IFNULL(published, 0) = 1
+           AND UPPER(COALESCE(status, 'OPEN')) NOT IN ('CLOSED', 'CLOSE', 'ENDED', 'END')
+           AND (endAt IS NULL OR endAt >= datetime('now'))
+         ORDER BY COALESCE(updatedAt, createdAt) DESC, auditionId DESC
          LIMIT 1`,
         []
       );
+
+      if (latestAuditionRow?.auditionId) {
+        topSubmissionRow = await db.get(
+          `SELECT s.*, a.title AS audition_title, a.auditionId, a.posterUrl, a.imageUrl, a.images
+           FROM audition_submissions s
+           JOIN auditions a ON a.auditionId = s.auditionId
+           WHERE s.auditionId = ?
+             AND COALESCE(s.approvalStatus, 'pending') = 'approved'
+           ORDER BY s.votesCount DESC, s.createdAt ASC
+           LIMIT 1`,
+          [latestAuditionRow.auditionId]
+        );
+      }
     }
 
     const latestAudition = latestAuditionRow

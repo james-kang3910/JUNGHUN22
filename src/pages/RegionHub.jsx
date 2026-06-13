@@ -15,6 +15,24 @@ import { isDirectVideoUrl, parseYouTubeId } from '../lib/videoUtils';
 import useAutoRefresh from '../hooks/useAutoRefresh';
 import { getRegionById } from '../data/regions.seed';
 import { buildRegionPublicUrl, generateQrDataUrl, downloadDataUrl } from '../lib/qrLink';
+import * as storageAdapter from '../lib/storageAdapter';
+
+function resolveBannerImageUrl(imageUrl) {
+  const raw = String(imageUrl || '').trim();
+  if (!raw) return '';
+  if (/^https?:\/\//i.test(raw) || raw.startsWith('data:')) return raw;
+  const base = import.meta.env.VITE_API_BASE || '';
+  return `${base}${raw}`;
+}
+
+function normalizePortalBanners(rawList) {
+  return (Array.isArray(rawList) ? rawList : []).map((b) => ({
+    id: b.id || b.bannerId || b.banner_id,
+    imageUrl: resolveBannerImageUrl(b.imageUrl || b.image_url),
+    alt: b.alt || b.title || '지역 광고',
+    linkUrl: b.linkUrl || b.link_url || '',
+  }));
+}
 
 function resolveNoticeImageUrl(imageUrl) {
   const raw = String(imageUrl || '').trim();
@@ -24,8 +42,8 @@ function resolveNoticeImageUrl(imageUrl) {
   return `${base}${raw}`;
 }
 
-// 날씨 위젯 컴포넌트
-function WeatherWidget({ lat, lon, regionName }) {
+// 날씨 (인라인 — 지역명 없이 온도만)
+function RegionWeather({ lat, lon }) {
   const [weather, setWeather] = useState(null);
   useEffect(() => {
     if (!lat || !lon) return;
@@ -35,11 +53,11 @@ function WeatherWidget({ lat, lon, regionName }) {
       .catch(() => setWeather(null));
   }, [lat, lon]);
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 13, color: '#fff', marginBottom: 6 }}>
-      <span style={{ fontSize: 17 }}>🌤️</span>
-      <span>{regionName || '서울'} 날씨</span>
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, fontSize: 12, color: '#fff', lineHeight: 1.2, whiteSpace: 'nowrap' }}>
+      <span style={{ fontSize: 14, lineHeight: 1 }}>🌤️</span>
+      <span>날씨</span>
       {weather ? <span>{weather.temperature}°C</span> : <span style={{ opacity: 0.6 }}>-</span>}
-    </div>
+    </span>
   );
 }
 
@@ -69,6 +87,8 @@ export default function RegionHub() {
   const [loading,    setLoading]    = useState(true);
   const [regionQrDataUrl, setRegionQrDataUrl] = useState('');
   const [regionQrLoading, setRegionQrLoading] = useState(false);
+  const [portalBanners, setPortalBanners] = useState([]);
+  const [bannerSlideIndex, setBannerSlideIndex] = useState(0);
   const hasLoadedRef = useRef(false);
 
   const loadAll = useCallback(async ({ background = false } = {}) => {
@@ -80,7 +100,7 @@ export default function RegionHub() {
       const BASE = import.meta.env.VITE_API_BASE || '';
       const dParam = selectedDistrictId ? `&districtId=${selectedDistrictId}` : '';
 
-      const [noticeRes, broadcastRes, newsRes, missionRes, auditionRes, statsRes] =
+      const [noticeRes, broadcastRes, newsRes, missionRes, auditionRes, statsRes, bannerRes] =
         await Promise.allSettled([
           fetch(`${BASE}/api/notices?region_id=${regionId}&status=ACTIVE&scope=REGION${dParam}`, { credentials: 'include' })
             .then(r => r.ok ? r.json() : []),
@@ -94,6 +114,7 @@ export default function RegionHub() {
             .then(r => r.ok ? r.json() : { auditions: [] }).catch(() => ({ auditions: [] })),
           fetch(`${BASE}/api/regions/${regionId}/stats`, { credentials: 'include' })
             .then(r => r.ok ? r.json() : null).catch(() => null),
+          storageAdapter.getRegionPortalBanners(regionId).catch(() => []),
         ]);
 
       if (noticeRes.status === 'fulfilled') {
@@ -133,6 +154,9 @@ export default function RegionHub() {
       if (statsRes.status === 'fulfilled' && statsRes.value) {
         setStats(s => ({ ...s, ...statsRes.value }));
       }
+      if (bannerRes.status === 'fulfilled') {
+        setPortalBanners(normalizePortalBanners(bannerRes.value));
+      }
       hasLoadedRef.current = true;
     } catch (e) {
       console.error('[RegionHub] load error:', e);
@@ -145,6 +169,21 @@ export default function RegionHub() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
   useAutoRefresh(() => loadAll({ background: true }), { enabled: !!regionId, intervalMs: 60000 });
+
+  useEffect(() => {
+    setBannerSlideIndex((prev) => {
+      if (!portalBanners.length) return 0;
+      return prev >= portalBanners.length ? 0 : prev;
+    });
+  }, [portalBanners.length]);
+
+  useEffect(() => {
+    if (portalBanners.length <= 1) return undefined;
+    const timer = setInterval(() => {
+      setBannerSlideIndex((prev) => (prev + 1) % portalBanners.length);
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [portalBanners.length]);
 
   useEffect(() => {
     let cancelled = false;
@@ -171,8 +210,6 @@ export default function RegionHub() {
     };
   }, [regionId]);
 
-  const regionPortalUrl = buildRegionPublicUrl(regionId);
-
   if (loading) {
     return (
       <div style={{ textAlign: 'center', padding: 60, color: '#9BA8AE', fontSize: 14 }}>
@@ -182,64 +219,95 @@ export default function RegionHub() {
   }
 
   return (
-    <div style={{ background: 'var(--c-bg, #F5F8FA)', minHeight: 'calc(100vh - 120px)', paddingBottom: 40 }}>
+    <div style={{ background: 'var(--c-bg, #F5F8FA)', minHeight: 'calc(100vh - 120px)', paddingBottom: 'calc(var(--navH, 72px) + 28px)' }}>
 
       {/* ══════ HERO ══════ */}
       <div style={{
         background: 'linear-gradient(135deg, #0e6f84 0%, #13788d 56%, #2495ac 100%)',
-        padding: '10px 12px 12px',
+        padding: '8px 10px 10px',
         color: '#fff',
-        margin: '10px 14px 0',
-        borderRadius: 16,
+        margin: '8px 14px 0',
+        borderRadius: 14,
         border: '1px solid rgba(255,255,255,0.08)',
         boxShadow: '0 4px 12px rgba(14,116,144,0.08)',
       }}>
-        <div style={{ fontSize: 10, fontWeight: 600, opacity: 0.56, marginBottom: 1, letterSpacing: 0.24 }}>
+        <div style={{ fontSize: 9, fontWeight: 600, opacity: 0.56, marginBottom: 2, letterSpacing: 0.24 }}>
           📍 지역 포탈
         </div>
-        <div style={{ fontSize: 19, fontWeight: 800, letterSpacing: '-0.4px', marginBottom: 1, lineHeight: 1.14 }}>
-          {regionName || '내 지역'}
-        </div>
-        {/* 날씨 위젯 */}
-        <WeatherWidget lat={lat} lon={lon} regionName={regionLabel} />
-        <div style={{ fontSize: 11, opacity: 0.62, marginBottom: 8, lineHeight: 1.24 }}>
-          {stats.activeCount > 0
-            ? `오늘 참여 가능한 활동 ${stats.activeCount}개`
-            : '지금 지역 활동을 시작해보세요'}
-        </div>
 
-        <div style={{ marginBottom: 10, padding: '8px 10px', borderRadius: 12, border: '1px solid rgba(255,255,255,0.26)', background: 'rgba(0,0,0,0.12)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10, marginBottom: 6 }}>
-            <strong style={{ fontSize: 12, fontWeight: 800 }}>지역포털 QR</strong>
-            <span style={{ fontSize: 10, opacity: 0.82 }}>스캔하면 지역포털 바로 이동</span>
+        <div style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 8,
+          marginBottom: 6,
+        }}>
+          <div style={{
+            display: 'flex',
+            flexWrap: 'wrap',
+            alignItems: 'center',
+            gap: '4px 10px',
+            flex: 1,
+            minWidth: 0,
+          }}>
+            <span style={{ fontSize: 17, fontWeight: 800, letterSpacing: '-0.4px', lineHeight: 1.1, whiteSpace: 'nowrap' }}>
+              {regionName || '내 지역'}
+            </span>
+            <RegionWeather lat={lat} lon={lon} />
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
-            <div style={{ width: 72, height: 72, borderRadius: 10, border: '1px solid rgba(255,255,255,0.3)', background: '#fff', overflow: 'hidden', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-              {regionQrDataUrl ? (
-                <img src={regionQrDataUrl} alt="지역포털 QR 코드" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-              ) : (
-                <span style={{ fontSize: 10, color: '#334155' }}>{regionQrLoading ? '생성중' : '-'}</span>
-              )}
-            </div>
-            <div style={{ display: 'flex', gap: 6, flex: 1, minWidth: 180, flexWrap: 'wrap' }}>
-              <button
-                type="button"
-                onClick={() => {
-                  if (!regionQrDataUrl) return;
-                  const safeName = String(regionName || regionLabel || 'region').replace(/\s+/g, '-');
-                  downloadDataUrl(regionQrDataUrl, `${safeName}-portal-qr.png`);
-                }}
-                style={{ ...ctaBtnStyle, background: 'rgba(255,255,255,0.2)', border: '1px solid rgba(255,255,255,0.35)', padding: '7px 12px' }}
-                disabled={!regionQrDataUrl}
-              >
-                QR 다운로드
-              </button>
-            </div>
+
+          <div style={{ display: 'flex', flexDirection: 'row', alignItems: 'center', gap: 5, flexShrink: 0 }}>
+            <button
+              type="button"
+              onClick={() => {
+                if (!regionQrDataUrl) return;
+                const safeName = String(regionName || regionLabel || 'region').replace(/\s+/g, '-');
+                downloadDataUrl(regionQrDataUrl, `${safeName}-portal-qr.png`);
+              }}
+              disabled={!regionQrDataUrl}
+              style={{
+                background: 'rgba(255,255,255,0.2)',
+                border: '1px solid rgba(255,255,255,0.35)',
+                borderRadius: 5,
+                color: '#fff',
+                fontSize: 9,
+                fontWeight: 700,
+                padding: '5px 6px',
+                cursor: regionQrDataUrl ? 'pointer' : 'not-allowed',
+                whiteSpace: 'nowrap',
+                opacity: regionQrDataUrl ? 1 : 0.5,
+                lineHeight: 1.2,
+              }}
+            >
+              QR 다운로드
+            </button>
+            {regionQrDataUrl ? (
+              <img
+                src={regionQrDataUrl}
+                alt="지역포털 QR"
+                title="스캔하면 지역포털 바로 이동"
+                style={{ width: 58, height: 58, display: 'block', background: '#fff', borderRadius: 5 }}
+              />
+            ) : (
+              <div style={{
+                width: 58,
+                height: 58,
+                borderRadius: 5,
+                background: 'rgba(255,255,255,0.12)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: 10,
+                opacity: 0.7,
+              }}>
+                {regionQrLoading ? '생성중' : '-'}
+              </div>
+            )}
           </div>
         </div>
 
         {/* Quick CTA — 2열 진입 메뉴 */}
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 6 }}>
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0, 1fr))', gap: 5 }}>
           {[
             { icon: '🎯', label: '미션/이벤트', path: toRegion('/missions') },
             { icon: '🎤', label: '오디션',   path: toRegion('/auditions') },
@@ -254,18 +322,18 @@ export default function RegionHub() {
               style={{
                 background: btn.bg || 'rgba(255,255,255,0.14)',
                 border: btn.border || '1px solid rgba(255,255,255,0.22)',
-                borderRadius: 10,
+                borderRadius: 8,
                 color: '#fff',
                 fontSize: 10,
                 fontWeight: 700,
-                padding: '5px 4px',
+                padding: '4px 3px',
                 cursor: 'pointer',
                 display: 'flex',
                 flexDirection: 'row',
                 alignItems: 'center',
                 justifyContent: 'center',
-                gap: 4,
-                minHeight: 38,
+                gap: 3,
+                minHeight: 32,
                 boxShadow: 'inset 0 1px 0 rgba(255,255,255,0.06)',
                 width: '100%',
               }}
@@ -301,39 +369,32 @@ export default function RegionHub() {
                   key={n.id}
                   onClick={() => navigate(toRegion('/notices'))}
                   style={{
-                    display: 'flex', flexDirection: 'column', alignItems: 'flex-start', gap: 2,
-                    padding: '12px 16px',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'stretch',
+                    padding: '10px 16px',
                     borderBottom: idx < notices.length - 1 ? '1px solid rgba(15,23,42,0.06)' : 'none',
                     cursor: 'pointer',
                   }}
                 >
                   {noticeImageUrl ? (
-                    <div style={{ width: '100%', marginBottom: 10, borderRadius: 12, overflow: 'hidden', border: '1px solid rgba(15,23,42,0.08)', background: '#e2e8f0' }}>
+                    <div style={{ width: '100%', marginBottom: 8, borderRadius: 12, overflow: 'hidden', border: '1px solid rgba(15,23,42,0.08)', background: '#e2e8f0' }}>
                       <img src={noticeImageUrl} alt={n.title || '공지 이미지'} style={{ display: 'block', width: '100%', maxHeight: 180, objectFit: 'cover' }} />
                     </div>
                   ) : null}
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: n.content && n.content.trim() ? 2 : 0 }}>
-                    <span style={{ fontSize: 12, fontWeight: 700, color: '#0ea5e9' }}>공지제목</span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, width: '100%', minWidth: 0 }}>
+                    <span style={{ fontSize: 12, fontWeight: 700, color: '#0ea5e9', flexShrink: 0, whiteSpace: 'nowrap' }}>공지제목</span>
                     <span style={{
-                      fontSize: 14, fontWeight: 600, color: '#0F172A', lineHeight: 1.5,
-                      wordBreak: 'break-all', whiteSpace: 'pre-line', width: '100%',
+                      fontSize: 14,
+                      fontWeight: 600,
+                      color: '#0F172A',
+                      flex: 1,
+                      minWidth: 0,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
                     }}>{n.title}</span>
                   </div>
-                  {n.content && n.content.trim() && (
-                    <div style={{
-                      marginTop: 2,
-                      fontSize: 13,
-                      color: '#64748B',
-                      lineHeight: 1.6,
-                      wordBreak: 'break-all',
-                      whiteSpace: 'pre-line',
-                      width: '100%',
-                      display: 'flex', alignItems: 'flex-start', gap: 6,
-                    }}>
-                      <span style={{ fontSize: 11, fontWeight: 700, color: '#0E7490', marginTop: 2 }}>공지내용</span>
-                      <span>{n.content.length > 120 ? n.content.slice(0, 120) + '...' : n.content}</span>
-                    </div>
-                  )}
                 </div>
                 );
               })}
@@ -345,7 +406,7 @@ export default function RegionHub() {
         <section style={{ marginBottom: 20 }}>
           <SectionHead
             icon="📡"
-            title="지역 방송"
+            title="지역 공유 발전방송"
             onMore={() => navigate(toRegion('/broadcasts'))}
           />
           {broadcasts.length === 0 ? (
@@ -367,7 +428,7 @@ export default function RegionHub() {
         <section style={{ marginBottom: 20 }}>
           <SectionHead
             icon="📰"
-            title="지역 뉴스"
+            title="지역 공유 발전뉴스"
             onMore={() => navigate(toRegion('/news'))}
           />
           {regionNews.length === 0 ? (
@@ -472,6 +533,118 @@ export default function RegionHub() {
               ))}
             </div>
           )}
+        </section>
+
+        {/* ══════ 5. 하단 배너 광고 (항상 노출) ══════ */}
+        <section style={{ marginBottom: 8 }}>
+          <SectionHead icon="📢" title="지역 광고" />
+          <div style={{
+            position: 'relative',
+            width: '100%',
+            aspectRatio: '3 / 1',
+            maxHeight: 120,
+            borderRadius: 16,
+            overflow: 'hidden',
+            background: '#f4f6f8',
+            border: '1px solid var(--c-border, rgba(15,23,42,0.08))',
+            boxShadow: '0 4px 12px rgba(14,116,144,0.06)',
+          }}>
+            {portalBanners.length === 0 ? (
+              <div style={{
+                position: 'absolute',
+                inset: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 4,
+                padding: '0 12px',
+                textAlign: 'center',
+              }}>
+                <div style={{ color: '#aaa', fontSize: 12, fontWeight: 500 }}>등록된 광고가 없습니다</div>
+                <div style={{ color: '#bbb', fontSize: 11 }}>지역관리 콘솔에서 배너를 등록하세요</div>
+              </div>
+            ) : (
+              <>
+                <div style={{
+                  position: 'absolute',
+                  inset: 0,
+                  display: 'flex',
+                  transition: 'transform 0.5s ease-in-out',
+                  transform: `translateX(-${bannerSlideIndex * 100}%)`,
+                }}>
+                  {portalBanners.map((banner, idx) => (
+                    <div
+                      key={banner.id || idx}
+                      role={banner.linkUrl ? 'link' : undefined}
+                      tabIndex={banner.linkUrl ? 0 : undefined}
+                      onClick={() => {
+                        if (!banner.linkUrl) return;
+                        window.open(banner.linkUrl, '_blank', 'noopener,noreferrer');
+                      }}
+                      onKeyDown={(e) => {
+                        if (!banner.linkUrl) return;
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          window.open(banner.linkUrl, '_blank', 'noopener,noreferrer');
+                        }
+                      }}
+                      style={{
+                        minWidth: '100%',
+                        height: '100%',
+                        flexShrink: 0,
+                        cursor: banner.linkUrl ? 'pointer' : 'default',
+                        position: 'relative',
+                        background: '#e2e8f0',
+                      }}
+                    >
+                      {banner.imageUrl ? (
+                        <img
+                          src={banner.imageUrl}
+                          alt={banner.alt}
+                          style={{ width: '100%', height: '100%', objectFit: 'cover', display: 'block' }}
+                        />
+                      ) : (
+                        <div style={{
+                          width: '100%',
+                          height: '100%',
+                          display: 'flex',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          color: '#64748B',
+                          fontSize: 13,
+                          fontWeight: 600,
+                        }}>
+                          {banner.alt}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                {portalBanners.length > 1 && (
+                  <div style={{
+                    position: 'absolute',
+                    bottom: 6,
+                    left: '50%',
+                    transform: 'translateX(-50%)',
+                    display: 'flex',
+                    gap: 4,
+                    zIndex: 2,
+                  }}>
+                    {portalBanners.map((_, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => setBannerSlideIndex(i)}
+                        aria-label={`배너 ${i + 1}`}
+                        className={`su-bannerDot${i === bannerSlideIndex ? ' is-active' : ''}`}
+                      />
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
         </section>
 
       </div>

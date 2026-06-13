@@ -3,8 +3,8 @@
 // - Activate: clean up old caches
 // - Fetch: navigation -> network-first, static assets -> cache-first
 
-const CACHE_NAME = 'su-pwa-v4';
-const RUNTIME_CACHE = 'su-pwa-runtime-v4';
+const CACHE_NAME = 'su-pwa-v5';
+const RUNTIME_CACHE = 'su-pwa-runtime-v5';
 const CORE_ASSETS = [
   '/',
   '/index.html',
@@ -24,6 +24,12 @@ self.addEventListener('install', event => {
   );
   // activate as soon as installed (optional)
   self.skipWaiting();
+});
+
+self.addEventListener('message', (event) => {
+  if (event?.data?.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
 });
 
 self.addEventListener('activate', event => {

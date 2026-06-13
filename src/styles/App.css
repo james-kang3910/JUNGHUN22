@@ -1483,8 +1483,28 @@ body:has(.su-home) {
   border: 1px solid #DDE3EA;
   border-radius: var(--r-section);
   box-shadow: var(--sh-sm);
-  padding: 20px 24px;
+  padding: 10px 12px;
   margin-bottom: var(--sp-3);
+  width: 100%;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.su-home .su-homeFeatured {
+  width: 100%;
+  box-sizing: border-box;
+}
+.su-home .su-bannerCarousel {
+  width: 100%;
+  aspect-ratio: 3 / 1;
+  max-height: 140px;
+  border-radius: var(--r-section);
+  overflow: hidden;
+  background: #f4f6f8;
+}
+@media (max-width: 540px) {
+  .su-home .su-bannerCarousel {
+    max-height: 120px;
+  }
 }
 .su-home .su-hero2__title {
   font-size: 22px;
@@ -1541,7 +1561,7 @@ body:has(.su-home) {
 .su-home .su-searchBtn:hover { background: var(--c-primary-s) !important; }
 
 /* ── 5. 빠른 실행 타일 ──────────────────────────────────────── */
-.su-home .su-tiles { gap: 12px !important; margin-bottom: var(--sp-5); }
+.su-home .su-tiles { gap: 12px !important; margin-bottom: var(--sp-5); padding-left: 0 !important; padding-right: 0 !important; }
 .su-home .su-tile {
   background: #FFFFFF;
   border: 1px solid #DDE3EA;
@@ -3678,6 +3698,42 @@ button{ cursor:pointer; }
   line-height: 1;
 }
 
+/* ── 상권: 메인과 동일 공지 패널 ───────────────────────────── */
+.su-page--shops .su-panel.su-panel--notice {
+  background: #ffffff !important;
+  border: 1px solid #dde3ea !important;
+  border-radius: 20px !important;
+  box-shadow: 0 6px 16px rgba(15, 23, 42, 0.05) !important;
+  padding: 14px 14px 16px !important;
+  margin-bottom: 28px !important;
+}
+
+.su-page--shops .su-panel.su-panel--notice .su-panelHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding-bottom: 8px;
+  margin-bottom: 0;
+  border-bottom: none;
+}
+
+.su-page--shops .su-panel.su-panel--notice .su-panelTitle {
+  font-size: 15px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.su-page--shops .su-panel.su-panel--notice .su-panelMore {
+  font-size: 12px;
+  font-weight: 600;
+  color: #0e7490;
+  background: #ecfeff;
+  border: 1px solid rgba(14, 116, 144, 0.22);
+  border-radius: 999px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+
 /* ── Hero Layer: 등록 CTA ────────────────────────────────── */
 .su-app .su-shops-hero {
   background:
@@ -3906,21 +3962,6 @@ button{ cursor:pointer; }
   margin-top: 6px;
 }
 
-.su-app .su-shop-card__chevron {
-  flex-shrink: 0;
-  width: 30px;
-  height: 30px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border-radius: 999px;
-  background: rgba(14,116,144,0.08);
-  border: 1px solid rgba(14,116,144,0.12);
-  color: #0e7490;
-  font-size: 14px;
-  font-weight: 800;
-}
-
 .su-app .su-shop-card__mine {
   display: inline-flex;
   align-items: center;
@@ -3981,11 +4022,8 @@ button{ cursor:pointer; }
   white-space: normal;
 }
 
-.su-app .su-shop-card__hint {
-  flex-shrink: 0;
-  font-size: 12px;
-  font-weight: 800;
-  color: #0e7490;
+.su-page--shops .su-shops-listHeader {
+  margin-top: 8px;
 }
 
 .su-app .su-shops-listHeader {
@@ -3993,8 +4031,20 @@ button{ cursor:pointer; }
   align-items: flex-end;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 12px;
+  margin-bottom: 10px;
   padding-left: 2px;
+}
+
+.su-app .su-shops-listFilters {
+  margin-bottom: 14px;
+}
+
+.su-app .su-shops-listFilters .su-shops-search__summary {
+  margin-top: 0;
+}
+
+.su-app .su-shops-listFilters .su-shops-chipRow {
+  margin-top: 10px;
 }
 
 .su-app .su-shops-listHeader__title {
@@ -4142,10 +4192,6 @@ button{ cursor:pointer; }
 
   .su-app .su-shops-hero__stats {
     width: 100%;
-  }
-
-  .su-app .su-shop-card__hint {
-    align-self: flex-end;
   }
 }
 

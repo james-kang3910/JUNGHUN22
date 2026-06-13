@@ -30,10 +30,4 @@ ReactDOM.createRoot(document.getElementById("root")).render(
   </React.StrictMode>
 );
 
-// Service worker registration: attempt in all environments (needed for push notifications)
-if ('serviceWorker' in navigator) {
-  import('./registerSW.js').catch(err => {
-    // swallow import/runtime failures — non-critical
-    console.error('[SW] could not load register module:', err);
-  });
-}
+// Service worker: vite-plugin-pwa가 dist/registerSW.js + sw.js 생성 (main.jsx에서 별도 등록하지 않음)

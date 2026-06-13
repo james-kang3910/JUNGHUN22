@@ -1,0 +1,56 @@
+══════════════════════════════════════════════════════════
+  SMI 팀원 배포 절차 (smi.ceo / Railway)
+  ※ 코드 push만 배포. DB·테스트 데이터는 자동으로 안 올라감.
+══════════════════════════════════════════════════════════
+
+[배포 담당자 — push 전]
+  1. npm run deploy:check -- --build
+     → 빌드 + dist 검증 + git 상태 확인
+  2. npm run deploy:help
+     → 체크리스트 출력
+  3. git add (소스 코드만 — zip/backups/.env 제외)
+  4. git commit -m "..."
+  5. git push origin 0518
+
+[Railway 대시보드 — 최초 1회 또는 변경 시]
+  · GitHub repo 연결
+  · Source branch = 0518
+  · Variables (.env.production.example 참고):
+      DATABASE_URL      (PostgreSQL — Railway addon)
+      JWT_SECRET
+      QR_SECRET
+      SESSION_SECRET
+      NODE_ENV=production
+      VITE_PUBLIC_SITE_URL=https://smi.ceo
+      VITE_APP_REGION_HOST=smi.ceo
+      VITE_REGION_URL_MODE=path     ← ulsan.smi.ceo DNS 전까지 path
+      ALLOWED_ORIGINS=https://smi.ceo,https://www.smi.ceo
+      ALLOW_REGION_SUBDOMAINS=true
+      APP_REGION_HOST=smi.ceo
+  · (권장) Volume → /app/server/uploads  ← 재배포 시 이미지 유지
+
+[Railway가 자동 실행 — railway.toml]
+  npm ci
+  npm ci --prefix server
+  npm run build:production
+  npm run verify:deploy
+  npm start  (+ prestart 검증)
+
+[배포 후 확인]
+  · https://smi.ceo/api/health  → {"status":"ok",...}
+  · 페이지 소스 → /assets/index-XXXX.js 해시 변경
+  · 홈 / 상권 / admin spot check
+  · Ctrl+Shift+R (캐시 무시 새로고침)
+
+[하지 말 것]
+  · GitHub "Deploy to Production (Legacy VPS)" — 옛 VPS용, 수동만
+  · smi.ceo admin 백업·복원에 로컬/테스트 JSON 사용
+  · migrate-data.js 를 운영 DATABASE_URL로 실행
+  · .env / *.zip / backups/ 커밋
+
+[데이터 정리]
+  · 로컬 테스트 DB → smi.ceo에 push로 안 올라감
+  · smi.ceo에서 만든 테스트 → admin에서 삭제 (배포로 안 지워짐)
+  · 배포 전 smi.ceo 운영 백업 1회 권장
+
+══════════════════════════════════════════════════════════

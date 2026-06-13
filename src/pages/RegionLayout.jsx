@@ -18,6 +18,7 @@ import {
   getRegionPathPrefix,
   getRegionSlug,
   getRegionSlugFromHostname,
+  navigateToRegion,
   resolveRegionFromKey,
   stripRegionPrefixFromPathname,
 } from '../lib/regionRoutes';
@@ -184,7 +185,7 @@ export default function RegionLayout() {
             const fallbackSlug = getRegionSlug(fallback);
             localStorage.setItem('selectedRegionId', fallbackId);
             if (fallback.name) localStorage.setItem('selectedRegionName', fallback.name);
-            navigate(buildRegionPath(fallbackId, '', { slug: fallbackSlug }), { replace: true });
+            navigateToRegion(navigate, fallbackId, '', { slug: fallbackSlug, replace: true });
           } else {
             setRegionName('지역');
           }
@@ -236,7 +237,7 @@ export default function RegionLayout() {
     if (!id || String(id) === String(canonicalRegionId)) return;
     const target = regions.find((r) => String(r.id || r.regionId || r.region_id) === String(id));
     const slug = target ? getRegionSlug(target) : id;
-    navigate(buildRegionPath(id, '', { slug }));
+    navigateToRegion(navigate, id, '', { slug });
   }, [navigate, canonicalRegionId, regions]);
 
   const getTabPath = useCallback(

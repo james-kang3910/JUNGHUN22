@@ -364,8 +364,8 @@ export default function AdminContents() {
           setToast({ open: true, message: "배너 제목을 입력해주세요.", type: "error" });
           return;
         }
-        // 신규 등록 시에만 이미지 필수 (수정 시에는 이미지 삭제 허용)
-        if (!imageUrl && !editingItem) {
+        // 신규 등록 시에만 이미지 필수 (수정 시에는 이미지 삭제 허용) — main/region_portal
+        if (!imageUrl && !editingItem && String(processedData.type || 'main') !== 'bottom_banner') {
           setToast({ open: true, message: "배너 이미지를 등록해주세요.", type: "error" });
           return;
         }
@@ -390,16 +390,14 @@ export default function AdminContents() {
         processedData.imageUrl = imageUrl || null;
         processedData.videoUrl = '';
         processedData.alt = title;
-        delete processedData.gradientEnabled;
-        delete processedData.gradientPreset;
-        delete processedData.gradientColor1;
-        delete processedData.gradientColor2;
-        delete processedData.gradientStop1;
-        delete processedData.gradientStop2;
-        delete processedData.chipLabel;
-        delete processedData.priority;
-        delete processedData.weight;
-        delete processedData.linkUrl;
+        processedData.type = String(processedData.type || 'main').trim() || 'main';
+        processedData.linkUrl = String(processedData.linkUrl || '').trim();
+        processedData.chipLabel = String(processedData.chipLabel || '').trim() || null;
+        processedData.priority = Number(processedData.priority) || 0;
+        if (processedData.type === 'bottom_banner' && !imageUrl && !description && !editingItem) {
+          setToast({ open: true, message: '하단 슬라이드 배너는 이미지 또는 설명 문구를 입력해주세요.', type: 'error' });
+          return;
+        }
         // ★ 수정 시 editingItem.id 포함 (없으면 upsertBanner가 항상 신규 POST 처리)
         if (editingItem && (editingItem.id || editingItem.bannerId)) {
           processedData.id = editingItem.id || editingItem.bannerId;
@@ -709,7 +707,20 @@ export default function AdminContents() {
       const todayYmd = getTodayLocalYmd();
       return [
         { key: 'title', label: '제목', type: 'text', placeholder: '배너 제목', required: true },
-        { key: 'description', label: '설명', type: 'textarea', placeholder: '배너 설명', rows: 3 },
+        { key: 'description', label: '설명 / 슬라이드 문구', type: 'textarea', placeholder: '하단 배너에 표시할 문구 (이미지 없을 때 사용)', rows: 2 },
+        {
+          key: 'type',
+          label: '배너 유형',
+          type: 'select',
+          options: [
+            { value: 'main', label: '메인 상단 배너' },
+            { value: 'bottom_banner', label: '하단 슬라이드 배너 (최대 10개)' },
+            { value: 'region_portal', label: '지역포털 배너' },
+          ],
+        },
+        { key: 'chipLabel', label: '뱃지 라벨', type: 'text', placeholder: '예: VIP · 무료체험' },
+        { key: 'linkUrl', label: '링크 URL', type: 'text', placeholder: 'https://...' },
+        { key: 'priority', label: '노출 우선순위', type: 'number', placeholder: '숫자가 클수록 먼저' },
         {
           key: "imageUrl",
           label: "이미지 등록",
@@ -1046,6 +1057,8 @@ export default function AdminContents() {
                     <div>
                       <span style={itemTitleStyle}>{item.title || item.alt || '제목 없음'}</span>
                       {!item.isActive && <span style={badgeStyle("#6b7280")}>비활성</span>}
+                      {String(item.type || 'main') === 'bottom_banner' && <span style={badgeStyle("#8b5cf6")}>하단슬라이드</span>}
+                      {String(item.type || 'main') === 'region_portal' && <span style={badgeStyle("#0ea5e9")}>지역포털</span>}
                       {item.videoUrl && <span style={badgeStyle("#22c55e")}>영상</span>}
                       {item.imageUrl && !item.videoUrl && <span style={badgeStyle("#38bdf8")}>이미지</span>}
                       {item.description && <div style={{ fontSize: 12, opacity: 0.58, marginTop: 6, lineHeight: 1.45, maxWidth: 420 }}>{item.description}</div>}

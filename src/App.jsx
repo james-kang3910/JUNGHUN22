@@ -16,8 +16,9 @@ import {
   signOut,
 } from "./lib/authStore";
 import { boot } from "./lib/authStore";
-import { buildRegionPath, isRegionSubdomainHost } from "./lib/regionRoutes";
+import { buildRegionPath, isRegionSubdomainHost, navigateToRegion } from "./lib/regionRoutes";
 import { syncOnAppStart } from "./lib/syncManager";
+import BottomBannerCarousel, { normalizeBottomBannerList } from "./components/BottomBannerCarousel";
 import Home from "./pages/Home";
 import Search from "./pages/Search";
 import Community from "./pages/Community";
@@ -125,7 +126,7 @@ const appNeonHomeStyles = `
 
   .su-home .su-tiles {
     gap: 15px;
-    padding: 6px 16px 22px;
+    padding: 6px 0 22px;
   }
 
   .su-home .su-tile {
@@ -812,7 +813,7 @@ const appNeonHomeStyles = `
 
   .su-home .su-tiles {
     gap: 12px !important;
-    padding: 8px 16px 24px !important;
+    padding: 8px 0 24px !important;
   }
 
   .su-home .su-tile,
@@ -1011,43 +1012,44 @@ const appNeonHomeStyles = `
   }
 
   .su-home .su-hero2 {
-    width: calc(100% - 16px) !important;
-    max-width: calc(100% - 16px) !important;
+    width: 100% !important;
+    max-width: 100% !important;
     box-sizing: border-box !important;
-    margin: 0 auto 16px !important;
-    padding: 16px 18px !important;
+    margin: 0 0 12px !important;
+    padding: 10px 12px !important;
     border-radius: 18px !important;
     min-height: 0 !important;
     box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06) !important;
   }
 
-  .su-home .su-hero2 > div:nth-of-type(3) {
+  .su-home .su-bannerCarousel {
     width: 100% !important;
     max-width: 100% !important;
     height: auto !important;
     min-height: 0 !important;
-    aspect-ratio: 4 / 1 !important;
+    aspect-ratio: 3 / 1 !important;
+    max-height: 140px !important;
     position: relative !important;
     overflow: hidden !important;
     border-radius: var(--r-section) !important;
     background: #f3f4f6 !important;
   }
 
-  .su-home .su-hero2 > div:nth-of-type(3) > div:first-child {
+  .su-home .su-bannerCarousel > div:first-child {
     position: absolute !important;
     inset: 0 !important;
     width: 100% !important;
     height: 100% !important;
   }
 
-  .su-home .su-hero2 > div:nth-of-type(3) > div:first-child > div {
+  .su-home .su-bannerCarousel > div:first-child > div {
     position: relative !important;
     min-width: 100% !important;
     height: 100% !important;
     overflow: hidden !important;
   }
 
-  .su-home .su-hero2 > div:nth-of-type(3) img {
+  .su-home .su-bannerCarousel img {
     position: absolute !important;
     inset: 0 !important;
     width: 100% !important;
@@ -1199,13 +1201,17 @@ const appNeonHomeStyles = `
     .su-home .su-hero2 {
       width: 100% !important;
       max-width: 100% !important;
-      margin: 0 0 12px !important;
-      padding: 12px 14px !important;
+      margin: 0 0 10px !important;
+      padding: 8px 10px !important;
       border-radius: 16px !important;
     }
 
-    .su-home .su-hero2 > div:first-child {
-      margin-bottom: 12px !important;
+    .su-home .su-bannerCarousel {
+      max-height: 120px !important;
+    }
+
+    .su-home .su-hero2 > div:first-child:not(.su-bannerCarousel) {
+      margin-bottom: 10px !important;
     }
 
     .su-home .su-heroPill {
@@ -1268,7 +1274,7 @@ const appNeonHomeStyles = `
 
     .su-home .su-tiles {
       gap: 10px !important;
-      padding: 4px 2px 18px !important;
+      padding: 4px 0 18px !important;
     }
 
     .su-home .su-tile {
@@ -1500,14 +1506,8 @@ function AppBottomNav({ isLoggedIn, authReady, onLogout }) {
   const location = useLocation();
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
   const [showHomeConfirm, setShowHomeConfirm] = useState(false);
-  const [bottomBanner, setBottomBanner] = useState(null);
-  const [bannerClosed, setBannerClosed] = useState(() => {
-    try {
-      return sessionStorage.getItem("su_banner_closed") === "1";
-    } catch (e) {
-      return false;
-    }
-  });
+  const [bottomBanners, setBottomBanners] = useState([]);
+  const [bannerClosed, setBannerClosed] = useState(false);
 
   useEffect(() => {
     let mounted = true;
@@ -1515,11 +1515,10 @@ function AppBottomNav({ isLoggedIn, authReady, onLogout }) {
       .then((response) => (response.ok ? response.json() : null))
       .then((data) => {
         if (!mounted) return;
-        const list = (data && (data.banners || data.data)) || [];
-        setBottomBanner(Array.isArray(list) && list.length ? list[0] : null);
+        setBottomBanners(normalizeBottomBannerList(data));
       })
       .catch(() => {
-        if (mounted) setBottomBanner(null);
+        if (mounted) setBottomBanners([]);
       });
     return () => {
       mounted = false;
@@ -1585,7 +1584,7 @@ function AppBottomNav({ isLoggedIn, authReady, onLogout }) {
           } catch (e) {
             // noop
           }
-          navigate(buildRegionPath(memberRegionId));
+          navigateToRegion(navigate, memberRegionId);
           return;
         }
         navigate("/region");
@@ -1632,21 +1631,8 @@ function AppBottomNav({ isLoggedIn, authReady, onLogout }) {
     WebkitBackdropFilter: "blur(8px)",
   };
 
-  const bannerStyle = {
-    position: "fixed",
-    left: "50%",
-    transform: "translateX(-50%)",
-    bottom: "calc(env(safe-area-inset-bottom, 0px) + 66px)",
-    width: "min(calc(100vw - 20px), 438px)",
-    zIndex: 9998,
-    background: "transparent",
-    border: "none",
-    borderRadius: 0,
-    display: "flex",
-    alignItems: "center",
-    gap: 8,
-    padding: 0,
-    boxShadow: "none",
+  const handleCloseBottomBanner = () => {
+    setBannerClosed(true);
   };
 
   const handleLogoutConfirm = async () => {
@@ -1747,62 +1733,8 @@ function AppBottomNav({ isLoggedIn, authReady, onLogout }) {
 
   return (
     <>
-      {bottomBanner && !bannerClosed ? (
-        <div style={bannerStyle}>
-          {bottomBanner.link_url ? (
-            <a
-              href={bottomBanner.link_url}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{ flex: 1, display: "flex", alignItems: "center", textDecoration: "none", minWidth: 0 }}
-            >
-              {bottomBanner.image_url ? (
-                <img
-                  src={bottomBanner.image_url}
-                  alt={bottomBanner.alt || "광고"}
-                  style={{ height: 40, maxWidth: "100%", objectFit: "contain", display: "block" }}
-                />
-              ) : (
-                <span style={{ fontSize: 13, color: "#0f172a" }}>{bottomBanner.alt || "광고"}</span>
-              )}
-            </a>
-          ) : (
-            <div style={{ flex: 1, minWidth: 0 }}>
-              {bottomBanner.image_url ? (
-                <img
-                  src={bottomBanner.image_url}
-                  alt={bottomBanner.alt || "광고"}
-                  style={{ height: 40, maxWidth: "100%", objectFit: "contain", display: "block" }}
-                />
-              ) : (
-                <span style={{ fontSize: 13, color: "#0f172a" }}>{bottomBanner.alt || "광고"}</span>
-              )}
-            </div>
-          )}
-          <button
-            type="button"
-            onClick={() => {
-              setBannerClosed(true);
-              try {
-                sessionStorage.setItem("su_banner_closed", "1");
-              } catch (e) {
-                // noop
-              }
-            }}
-            aria-label="배너 닫기"
-            style={{
-              border: 0,
-              background: "transparent",
-              color: "#94a3b8",
-              fontSize: 18,
-              lineHeight: 1,
-              padding: "4px 2px 4px 6px",
-              cursor: "pointer",
-            }}
-          >
-            x
-          </button>
-        </div>
+      {bottomBanners.length > 0 && !bannerClosed ? (
+        <BottomBannerCarousel banners={bottomBanners} onClose={handleCloseBottomBanner} />
       ) : null}
 
       <div style={navShellStyle}>
@@ -6047,7 +5979,7 @@ function GlobalChatFloatingBadge({ isLoggedIn }) {
     dragStateRef.current = null;
     if (!moved) {
       setUnreadCount(0);
-      navigate(buildRegionPath(regionId, '/chat'));
+      navigateToRegion(navigate, regionId, '/chat');
     }
   };
 

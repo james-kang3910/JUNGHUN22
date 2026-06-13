@@ -1,7 +1,9 @@
 import QRCode from 'qrcode';
 import {
   buildRegionPath,
+  buildRegionSubdomainUrl,
   getRegionSlugFromHostname,
+  isRegionSubdomainUrlMode,
   isReservedRegionPathSegment,
   parseRegionPathname,
 } from './regionRoutes';
@@ -37,6 +39,9 @@ export async function generateQrDataUrl(targetUrl, size = 320) {
 export function buildRegionPublicUrl(regionId, options = {}) {
   const id = String(regionId || '').trim();
   if (!id) return '';
+  if (isRegionSubdomainUrlMode()) {
+    return buildRegionSubdomainUrl(id, '', options);
+  }
   return buildAbsoluteUrl(buildRegionPath(id, '', options));
 }
 

@@ -1,0 +1,39 @@
+name: Build Verify (0518)
+
+# push 시 빌드만 검증 — Railway 배포는 Git 연동으로 별도 진행
+on:
+  push:
+    branches:
+      - '0518'
+  pull_request:
+    branches:
+      - '0518'
+      - main
+  workflow_dispatch:
+
+env:
+  NODE_VERSION: '20.x'
+
+jobs:
+  build-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install and build (Railway와 동일 순서)
+        run: |
+          npm ci
+          npm ci --prefix server
+          npm run build:production
+          npm run verify:deploy
+        env:
+          NODE_ENV: production
+
+      - name: Print bundle id for deploy check
+        run: |
+          grep -o '/assets/index-[^"]*\.js' dist/index.html || true
